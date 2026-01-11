@@ -1,0 +1,109 @@
+# ================================================
+# LLM-TradeBot US Stocks - .gitignore
+# ================================================
+
+# ========================
+# 敏感文件 (Sensitive Files)
+# ========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials/
+
+# ========================
+# 参考项目 (Reference Projects)
+# ========================
+nofx-dev/
+nofx/
+
+# ========================
+# 日志文件 (Logs)
+# ========================
+logs/
+*.log
+*.log.*
+trading_logs/
+backtest_logs/
+
+# ========================
+# 数据文件 (Data)
+# ========================
+data/
+.cache/
+*.csv
+*.json
+!config.yaml
+!package.json
+market_data/
+historical_data/
+cache/
+*.db
+*.sqlite
+*.sqlite3
+
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+ENV/
+env/
+
+# ========================
+# IDE
+# ========================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ========================
+# 运行时文件 (Runtime)
+# ========================
+*.pid
+*.sock
+node_modules/
+
+# ========================
+# 回测结果 (Backtest Results)
+# ========================
+backtest_results/
+reports/
+*.html
+!web/*.html
+
+# ========================
+# 账户信息 (Account Info)
+# ========================
+accounts.json
+positions.json
+orders.json
+
+# AI 开发要求文档 (本地)
+*.local.md
