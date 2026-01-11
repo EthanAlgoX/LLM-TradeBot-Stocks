@@ -68,11 +68,10 @@ class TrendAnalysis:
 
 @dataclass
 class TradeDecision:
-    """Trading decision output"""
-    action: str  # "BUY", "SELL", "WAIT"
+    """Trading decision output - 日内做多策略"""
+    action: str  # "BUY" or "WAIT" (日内做多策略)
     entry_price: float = 0.0
-    stop_loss: float = 0.0
-    take_profit: float = 0.0
+    take_profit: float = 0.0  # 目标止盈价
     confidence: float = 0.0
     summary_reason: str = ""
     detailed_reasons: List[str] = field(default_factory=list)
@@ -81,7 +80,6 @@ class TradeDecision:
         return {
             'action': self.action,
             'entry_price': self.entry_price,
-            'stop_loss': self.stop_loss,
             'take_profit': self.take_profit,
             'confidence': self.confidence,
             'summary_reason': self.summary_reason,
@@ -313,12 +311,15 @@ class DecisionAgent:
         current_price = data.current_price if data.current_price > 0 else float(current['close'])
         decision.entry_price = current_price
         
-        # Calculate stops
+        # Calculate target (take profit only, no stop loss)
         atr = float(current.get('atr', current_price * 0.02)) if pd.notna(current.get('atr')) else current_price * 0.02
         
-        # 改进盈亏比为 2:1 (止盈 3 ATR，止损 1.5 ATR)
-        decision.stop_loss = current_price - (atr * 1.5)
-        decision.take_profit = current_price + (atr * 3.0)  # 改为 3x ATR
+        # 确保 ATR 为正值 (最小为入场价的 2%)
+        atr = max(atr, current_price * 0.02)
+        
+        # 目标价：入场价 + 3 ATR (约 4-6% 止盈)
+        # 止盈价格一定大于买入价格
+        decision.take_profit = current_price + (atr * 3.0)
         
         # Collect signals
         buy_signals = []
@@ -368,19 +369,22 @@ class DecisionAgent:
         # 普通股票：需要 2 个信号
         required_signals = 1 if symbol in self.HIGH_BETA_STOCKS else 2
         
-        if len(buy_signals) >= required_signals:
+        # 日内做多策略：只有 BUY 或 WAIT 两种决策
+        # BUY: 满足买入信号且无强烈看空信号
+        # WAIT: 信号不足或有看空信号
+        if len(buy_signals) >= required_signals and len(sell_signals) == 0:
             decision.action = "BUY"
             decision.confidence = min(1.0, len(buy_signals) * 0.2)
             decision.detailed_reasons = buy_signals
             decision.summary_reason = f"强买入信号: {', '.join(buy_signals[:2])}"
-        elif len(sell_signals) >= required_signals:
-            decision.action = "SELL"
-            decision.confidence = min(1.0, len(sell_signals) * 0.2)
-            decision.detailed_reasons = sell_signals
-            decision.summary_reason = f"卖出信号: {', '.join(sell_signals[:2])}"
         else:
             decision.action = "WAIT"
-            decision.summary_reason = "无明确信号"
+            if len(sell_signals) > 0:
+                decision.summary_reason = f"看空信号: {', '.join(sell_signals[:2])}"
+            elif len(buy_signals) > 0:
+                decision.summary_reason = f"信号不足 ({len(buy_signals)}/{required_signals})"
+            else:
+                decision.summary_reason = "无明确信号"
             decision.detailed_reasons = buy_signals + sell_signals
         
         return decision

@@ -26,7 +26,7 @@ Date: 2026-01-11
 import asyncio
 import argparse
 from datetime import datetime, date, time, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 import pandas as pd
@@ -105,18 +105,21 @@ class BacktestTrade:
 
 @dataclass
 class DailyRecord:
-    """每日每股票记录 (包括未开仓)"""
+    """每日每股票记录 (包括未开仓) - 包含完整过程数据"""
     symbol: str
     trade_date: date
     
     # 决策信息
     action: str  # BUY / WAIT / REJECT
     decision_reason: str
+    confidence: float = 0.0  # 决策置信度 (0-1)
     
-    # OR15 信息
+    # OR15 信息 (开盘15分钟)
     or15_high: float = 0.0
     or15_low: float = 0.0
     or15_close: float = 0.0  # 第一根K线收盘价
+    or15_open: float = 0.0   # 第一根K线开盘价
+    or15_volume: int = 0     # OR15 成交量
     
     # 最大潜在收益 (当日OR15后最高价 - OR15 close)
     day_high_after_or15: float = 0.0
@@ -130,23 +133,71 @@ class DailyRecord:
     exit_reason: str = ""
     pnl_pct: float = 0.0
     
+    # ===== 输入数据 =====
+    # OR15 K线数据 (前一根和当前根)
+    or15_bars: List[Dict] = field(default_factory=list)  # 最近几根15分钟K线
+    
+    # 技术指标值
+    indicators: Dict[str, Any] = field(default_factory=dict)  # EMA, MACD, RSI 等
+    
+    # ===== 过程数据 =====
+    # 多周期分析
+    weekly_bias: str = ""     # 周线偏向: bullish/bearish/neutral
+    daily_bias: str = ""      # 日线偏向
+    intraday_bias: str = ""   # 日内偏向
+    
+    # 决策过程详细信息
+    decision_notes: List[str] = field(default_factory=list)  # 决策过程的详细notes
+    
+    # 模拟交易过程 (如果交易)
+    trade_simulation: Dict[str, Any] = field(default_factory=dict)  # 模拟执行细节
+    
     def to_dict(self) -> Dict:
         return {
+            # 基本信息
             "symbol": self.symbol,
             "trade_date": str(self.trade_date),
             "action": self.action,
             "decision_reason": self.decision_reason,
-            "or15_high": self.or15_high,
-            "or15_low": self.or15_low,
-            "or15_close": self.or15_close,
+            "confidence": self.confidence,
+            
+            # OR15 信息
+            "or15": {
+                "open": self.or15_open,
+                "high": self.or15_high,
+                "low": self.or15_low,
+                "close": self.or15_close,
+                "volume": self.or15_volume
+            },
+            
+            # 最大潜在收益
             "day_high_after_or15": self.day_high_after_or15,
             "day_high_time": self.day_high_time,
             "max_potential_pct": self.max_potential_pct,
+            
+            # 交易结果
             "traded": self.traded,
             "entry_price": self.entry_price,
             "exit_price": self.exit_price,
             "exit_reason": self.exit_reason,
-            "pnl_pct": self.pnl_pct
+            "pnl_pct": self.pnl_pct,
+            
+            # 输入数据 (K线)
+            "input_data": {
+                "or15_bars": self.or15_bars,
+                "indicators": self.indicators
+            },
+            
+            # 决策过程
+            "decision_process": {
+                "weekly_bias": self.weekly_bias,
+                "daily_bias": self.daily_bias,
+                "intraday_bias": self.intraday_bias,
+                "notes": self.decision_notes
+            },
+            
+            # 模拟交易详情
+            "trade_simulation": self.trade_simulation
         }
 
 
@@ -367,11 +418,10 @@ class DailyBacktester:
         historical_15m = df_15m[df_15m['date'] < trade_date].tail(100)
         bars_for_decision = historical_15m  # 不包含当天任何数据
         
-        # 入场价使用当天开盘价（与 _simulate_day 保持一致）
-        # 修复 Bug: 之前使用前一天收盘价，导致与实际模拟不一致
+        # 入场价使用当天 OR15 收盘价（9:45 决策时能看到的价格）
         day_data = df_15m[df_15m['date'] == trade_date]
         if len(day_data) > 0:
-            entry_price = float(day_data.iloc[0]['open'])
+            entry_price = float(day_data.iloc[0]['close'])
         elif len(historical_15m) > 0:
             entry_price = float(historical_15m.iloc[-1]['close'])
         else:
@@ -442,8 +492,8 @@ class DailyBacktester:
         historical_15m = df_15m[df_15m['date'] < trade_date].copy()
         bars_for_decision = historical_15m  # 不包含当天任何数据
         
-        # 入场价 = 当天第一根 K 线开盘价（模拟开盘买入）
-        entry_price = float(day_data.iloc[0]['open'])
+        # 入场价 = OR15 K线收盘价（9:45 决策后买入）
+        entry_price = float(day_data.iloc[0]['close'])
         
         processed = ProcessedData(
             symbol=symbol,
@@ -953,11 +1003,80 @@ async def run_backtest_all(
                 symbol, trade_date, df_15m, data['df_weekly'], data['df_daily']
             )
             
-            # 计算 OR15 信息
+            # 计算 OR15 信息 (当天开盘第一根K线 - 这是决策时能看到的唯一当天数据)
             first_bar = day_data.iloc[0]
+            or15_open = float(first_bar['open'])
             or15_high = float(first_bar['high'])
             or15_low = float(first_bar['low'])
             or15_close = float(first_bar['close'])
+            or15_volume = int(first_bar['volume']) if 'volume' in first_bar else 0
+            
+            # ===== 修复：记录 DataProcessorAgent 的真实输入数据 =====
+            # 决策使用的是 trade_date 之前的历史数据，避免 lookahead bias
+            historical_15m = df_15m[df_15m['date'] < trade_date].tail(100)
+            
+            # 收集历史数据最后 5 根 K 线 (决策时实际能看到的数据)
+            input_bars = []
+            if len(historical_15m) >= 5:
+                for idx in range(-5, 0):
+                    bar = historical_15m.iloc[idx]
+                    bar_time = pd.to_datetime(historical_15m.index[idx])
+                    if bar_time.tz is not None:
+                        bar_time = bar_time.tz_convert(ET)
+                    input_bars.append({
+                        "date": str(bar['date']) if 'date' in bar else "",
+                        "time": bar_time.strftime("%Y-%m-%d %H:%M") if hasattr(bar_time, 'strftime') else str(bar_time),
+                        "open": float(bar['open']),
+                        "high": float(bar['high']),
+                        "low": float(bar['low']),
+                        "close": float(bar['close']),
+                        "volume": int(bar['volume']) if 'volume' in bar else 0
+                    })
+            
+            # 提取技术指标 (使用历史数据最后一根K线的指标，而非当天数据)
+            indicators = {}
+            if len(historical_15m) > 0:
+                last_row = historical_15m.iloc[-1]
+                for col in ['ema_9', 'ema_21', 'ema_50', 'macd', 'macd_signal', 'macd_hist', 'rsi', 'atr', 'bb_upper', 'bb_lower', 'volume_ratio']:
+                    if col in historical_15m.columns:
+                        val = last_row.get(col)
+                        if pd.notna(val):
+                            indicators[col] = round(float(val), 4)
+                # 记录最后一根历史K线的日期
+                last_hist_time = pd.to_datetime(historical_15m.index[-1])
+                if last_hist_time.tz is not None:
+                    last_hist_time = last_hist_time.tz_convert(ET)
+                indicators['_data_as_of'] = last_hist_time.strftime("%Y-%m-%d %H:%M")
+            
+            # 获取多周期偏向 (使用 trade_date 之前的数据)
+            weekly_bias = ""
+            daily_bias = ""
+            # 周线：过滤掉 trade_date 之后的数据
+            if data['df_weekly'] is not None and len(data['df_weekly']) > 0:
+                df_weekly_hist = data['df_weekly']
+                if 'date' in df_weekly_hist.columns:
+                    df_weekly_hist = df_weekly_hist[df_weekly_hist['date'] < trade_date]
+                if len(df_weekly_hist) > 0:
+                    weekly_last = df_weekly_hist.iloc[-1]
+                    if 'ema9' in df_weekly_hist.columns and 'ema21' in df_weekly_hist.columns:
+                        if pd.notna(weekly_last.get('ema9')) and pd.notna(weekly_last.get('ema21')):
+                            if weekly_last['ema9'] > weekly_last['ema21']:
+                                weekly_bias = "bullish"
+                            else:
+                                weekly_bias = "bearish"
+            # 日线：过滤掉 trade_date 之后的数据
+            if data['df_daily'] is not None and len(data['df_daily']) > 0:
+                df_daily_hist = data['df_daily']
+                if 'date' in df_daily_hist.columns:
+                    df_daily_hist = df_daily_hist[df_daily_hist['date'] < trade_date]
+                if len(df_daily_hist) > 0:
+                    daily_last = df_daily_hist.iloc[-1]
+                    if 'ema9' in df_daily_hist.columns and 'ema21' in df_daily_hist.columns:
+                        if pd.notna(daily_last.get('ema9')) and pd.notna(daily_last.get('ema21')):
+                            if daily_last['ema9'] > daily_last['ema21']:
+                                daily_bias = "bullish"
+                            else:
+                                daily_bias = "bearish"
             
             # 计算最高价和时间
             after_or15 = day_data.iloc[1:]
@@ -981,9 +1100,15 @@ async def run_backtest_all(
                 'action': action,
                 'confidence': confidence,
                 'reason': reason,
+                'or15_open': or15_open,
                 'or15_high': or15_high,
                 'or15_low': or15_low,
                 'or15_close': or15_close,
+                'or15_volume': or15_volume,
+                'input_bars': input_bars,  # 修复：使用历史数据 K 线
+                'indicators': indicators,
+                'weekly_bias': weekly_bias,
+                'daily_bias': daily_bias,
                 'day_high_after_or15': day_high_after_or15,
                 'day_high_time': day_high_time,
                 'max_potential_pct': max_potential_pct
@@ -1051,15 +1176,18 @@ async def run_backtest_all(
                 entry_price = exit_price = pnl_pct = 0
                 exit_reason = ""
             
-            # 创建每日记录
+            # 创建每日记录 (包含完整过程数据)
             record = DailyRecord(
                 symbol=symbol,
                 trade_date=trade_date,
                 action=action,
                 decision_reason=decision_reason,
+                confidence=sig['confidence'],
+                or15_open=sig['or15_open'],
                 or15_high=sig['or15_high'],
                 or15_low=sig['or15_low'],
                 or15_close=sig['or15_close'],
+                or15_volume=sig['or15_volume'],
                 day_high_after_or15=sig['day_high_after_or15'],
                 day_high_time=sig['day_high_time'],
                 max_potential_pct=sig['max_potential_pct'],
@@ -1067,7 +1195,15 @@ async def run_backtest_all(
                 entry_price=entry_price,
                 exit_price=exit_price,
                 exit_reason=exit_reason,
-                pnl_pct=pnl_pct
+                pnl_pct=pnl_pct,
+                # 输入数据 (决策前的历史数据，不是当天数据)
+                or15_bars=sig['input_bars'],
+                indicators=sig['indicators'],
+                # 决策过程
+                weekly_bias=sig['weekly_bias'],
+                daily_bias=sig['daily_bias'],
+                intraday_bias="bullish" if sig['action'] == 'BUY' else "neutral",
+                decision_notes=[sig['reason']] if sig['reason'] else []
             )
             daily_records[trade_date].append(record)
     
