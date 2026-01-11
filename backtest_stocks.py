@@ -229,7 +229,8 @@ class StockBacktester:
         self,
         symbol: str,
         interval: str = '1d',
-        days: int = 30
+        days: int = 30,
+        session_dir: str = None  # Directory to save pipeline data
     ) -> BacktestResult:
         """
         Run backtest on a single symbol
@@ -320,7 +321,8 @@ class StockBacktester:
             
             # Generate signal if no position
             if not position:
-                signal = self._generate_signal(history)
+                signal = self._generate_signal(history, symbol=symbol, 
+                                                session_dir=session_dir, bar_time=timestamp)
                 
                 if signal == 'buy' and capital > 0:
                     # Calculate position size
@@ -396,12 +398,15 @@ class StockBacktester:
         
         return result
     
-    def _generate_signal(self, df: pd.DataFrame, symbol: str = "STOCK") -> Optional[str]:
+    def _generate_signal(self, df: pd.DataFrame, symbol: str = "STOCK", 
+                          session_dir: str = None, bar_time: datetime = None) -> Optional[str]:
         """
         Generate signal using Simplified 3-Agent Pipeline:
         1. DataProcessorAgent: raw data → indicators
         2. MultiPeriodAgent: indicators → trend analysis
         3. DecisionAgent: trend → BUY/SELL/WAIT
+        
+        Saves all pipeline data to session_dir/{date}_{symbol}_pipeline.json
         """
         if len(df) < 30:
             return None
@@ -416,6 +421,18 @@ class StockBacktester:
             # Step 3: DecisionAgent - make decision
             decision = self.decision_agent.decide(processed_data, trend_analysis)
             
+            # Save pipeline data if session_dir provided
+            if session_dir and bar_time:
+                self._save_pipeline_data(
+                    session_dir=session_dir,
+                    symbol=symbol,
+                    bar_time=bar_time,
+                    input_df=df,
+                    processed_data=processed_data,
+                    trend_analysis=trend_analysis,
+                    decision=decision
+                )
+            
             # Return signal
             if decision.action == "BUY":
                 return 'buy'
@@ -426,6 +443,88 @@ class StockBacktester:
                 
         except Exception as e:
             print(f"⚠️ Signal generation error: {e}")
+            return None
+    
+    def _save_pipeline_data(
+        self, 
+        session_dir: str,
+        symbol: str,
+        bar_time: datetime,
+        input_df: pd.DataFrame,
+        processed_data,  # ProcessedData
+        trend_analysis,  # TrendAnalysis
+        decision  # TradeDecision
+    ):
+        """
+        Save all agent pipeline data flow to structured files
+        
+        Structure:
+        data/backtest_cache/{session}/
+            └── pipeline/
+                └── {date}_{symbol}/
+                    ├── input_data.json
+                    ├── indicators.json
+                    ├── trend_analysis.json
+                    └── decision.json
+        """
+        # Create pipeline directory for this stock
+        date_str = bar_time.strftime('%Y%m%d')
+        pipeline_dir = os.path.join(session_dir, 'pipeline', f"{date_str}_{symbol}")
+        os.makedirs(pipeline_dir, exist_ok=True)
+        
+        time_str = bar_time.strftime('%H%M%S')
+        
+        # 1. Save input data (last 5 bars for context)
+        input_file = os.path.join(pipeline_dir, f"{time_str}_1_input.json")
+        input_data = {
+            'timestamp': bar_time.isoformat() if bar_time else None,
+            'symbol': symbol,
+            'last_bars': input_df.tail(5).reset_index().to_dict('records') if not input_df.empty else []
+        }
+        # Convert timestamps to strings
+        for bar in input_data['last_bars']:
+            if 'timestamp' in bar:
+                bar['timestamp'] = str(bar['timestamp'])
+        with open(input_file, 'w', encoding='utf-8') as f:
+            json.dump(input_data, f, indent=2, ensure_ascii=False, default=str)
+        
+        # 2. Save indicators from processed data
+        indicators_file = os.path.join(pipeline_dir, f"{time_str}_2_indicators.json")
+        if processed_data.df_15m is not None and not processed_data.df_15m.empty:
+            last_row = processed_data.df_15m.iloc[-1]
+            indicators = {
+                'timestamp': bar_time.isoformat() if bar_time else None,
+                'current_price': processed_data.current_price,
+                'ema_9': float(last_row.get('ema_9', 0)) if pd.notna(last_row.get('ema_9')) else None,
+                'ema_21': float(last_row.get('ema_21', 0)) if pd.notna(last_row.get('ema_21')) else None,
+                'ema_50': float(last_row.get('ema_50', 0)) if pd.notna(last_row.get('ema_50')) else None,
+                'macd': float(last_row.get('macd', 0)) if pd.notna(last_row.get('macd')) else None,
+                'macd_signal': float(last_row.get('macd_signal', 0)) if pd.notna(last_row.get('macd_signal')) else None,
+                'macd_hist': float(last_row.get('macd_hist', 0)) if pd.notna(last_row.get('macd_hist')) else None,
+                'rsi': float(last_row.get('rsi', 0)) if pd.notna(last_row.get('rsi')) else None,
+                'atr': float(last_row.get('atr', 0)) if pd.notna(last_row.get('atr')) else None,
+                'bb_upper': float(last_row.get('bb_upper', 0)) if pd.notna(last_row.get('bb_upper')) else None,
+                'bb_lower': float(last_row.get('bb_lower', 0)) if pd.notna(last_row.get('bb_lower')) else None,
+                'volume_ratio': float(last_row.get('volume_ratio', 0)) if pd.notna(last_row.get('volume_ratio')) else None,
+            }
+        else:
+            indicators = {'timestamp': bar_time.isoformat() if bar_time else None, 'error': 'No data'}
+        with open(indicators_file, 'w', encoding='utf-8') as f:
+            json.dump(indicators, f, indent=2, ensure_ascii=False)
+        
+        # 3. Save trend analysis
+        trend_file = os.path.join(pipeline_dir, f"{time_str}_3_trend.json")
+        trend_data = trend_analysis.to_dict()
+        trend_data['timestamp'] = bar_time.isoformat() if bar_time else None
+        with open(trend_file, 'w', encoding='utf-8') as f:
+            json.dump(trend_data, f, indent=2, ensure_ascii=False)
+        
+        # 4. Save decision
+        decision_file = os.path.join(pipeline_dir, f"{time_str}_4_decision.json")
+        decision_data = decision.to_dict()
+        decision_data['timestamp'] = bar_time.isoformat() if bar_time else None
+        with open(decision_file, 'w', encoding='utf-8') as f:
+            json.dump(decision_data, f, indent=2, ensure_ascii=False)
             return None
     
     def _print_results(self, result: BacktestResult):
@@ -517,7 +616,7 @@ def main():
     for symbol in symbols:
         symbol = symbol.strip()
         try:
-            result = backtester.run_backtest(symbol, args.interval, args.days)
+            result = backtester.run_backtest(symbol, args.interval, args.days, session_dir=session_dir)
             if result:
                 # Save result to session directory
                 backtester.save_results(result, session_dir)
