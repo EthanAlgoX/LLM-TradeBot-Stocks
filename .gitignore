@@ -68,6 +68,7 @@ wheels/
 .installed.cfg
 *.egg
 venv/
+venv311/
 .venv/
 ENV/
 env/
