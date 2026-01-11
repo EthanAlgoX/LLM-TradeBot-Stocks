@@ -425,13 +425,21 @@ class DailyBacktester:
         else:  # 晚盘（18:00-20:00）
             take_profit_pct = 0.06  # 6%
         
+        # 动态止损：超高波动股票使用更宽止损
+        # 分析发现 SIDU/OSS/RDW 经常有 20%+ 潜在但被 -2.1% 止损
+        ULTRA_HIGH_VOLATILITY = ["SIDU", "OSS", "RDW", "NFE", "APLD"]
+        if symbol in ULTRA_HIGH_VOLATILITY:
+            stop_loss_pct = 0.03  # 3% 止损
+        else:
+            stop_loss_pct = 0.02  # 2% 止损
+        
         trade = BacktestTrade(
             symbol=symbol,
             trade_date=trade_date,
             entry_time=entry_time,
             entry_price=entry_price,  # 使用本地计算的入场价格
             entry_reason=decision.summary_reason,
-            stop_loss=entry_price - (entry_price * 0.02),  # 2% 止损
+            stop_loss=entry_price - (entry_price * stop_loss_pct),  # 动态止损
             take_profit=entry_price + (entry_price * take_profit_pct)  # 动态止盈
         )
         

@@ -268,10 +268,18 @@ class DecisionAgent:
     Uses OR15 (Opening Range 15min) strategy for stocks.
     """
     
-    # 高波动股票列表（基于回测验证，仅保留效果显著的股票）
-    # BKKT: 80% 胜率, +23.56% 收益
-    # RCAT: 80% 胜率, 多次止盈
-    HIGH_BETA_STOCKS = ["BKKT", "RCAT"]
+    # 高波动股票列表（基于回测验证，降低入场信号阈值）
+    # 平衡方案：仅保留捕获率高的股票
+    # BKKT: 22.0% 潜在 → +3.9% 实际（捕获率高）
+    # RCAT: 11.1% 潜在 → +1.4% 实际
+    # CRML: 频繁 TOP 10，胜率好
+    # ASTS: 频繁 TOP 10，波动大
+    # SIDU/OSS: 超高潜在收益（20%+），需低阈值+宽止损
+    HIGH_BETA_STOCKS = [
+        "BKKT", "RCAT",      # 验证有效
+        "CRML", "ASTS",      # 频繁 TOP 10
+        "SIDU", "OSS",       # 超高波动（配合 3% 止损）
+    ]
     
     def __init__(
         self,
