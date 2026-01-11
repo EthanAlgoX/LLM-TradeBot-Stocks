@@ -43,6 +43,7 @@ from src.agents.simple_agents import (
     ProcessedData, TrendAnalysis, TradeDecision, WeeklyBias
 )
 from src.utils.data_cache import DataCache
+from src.utils.data_manager import DataManager
 
 # 美东时区
 ET = ZoneInfo("America/New_York")
@@ -206,6 +207,7 @@ class DailyBacktester:
         self.trend_agent = MultiPeriodAgent()
         self.decision_agent = DecisionAgent()
         self.cache = DataCache()
+        self.data_manager = DataManager()  # 数据存储管理
     
     async def run_backtest(
         self,
@@ -280,11 +282,20 @@ class DailyBacktester:
         return result
     
     async def _fetch_historical_15m(self, symbol: str, days: int) -> Optional[pd.DataFrame]:
-        """获取历史 15 分钟数据"""
+        """获取历史 15 分钟数据并保存原始数据"""
         try:
             bars = self.cache.get_bars(symbol, '15m', days=days)
             if bars:
                 df = self.cache.to_dataframe(bars)
+                
+                # 保存原始数据到 data/raw_data/{date}/{symbol}_15m.json
+                if not df.empty:
+                    # 按日期分组保存
+                    df_copy = df.copy()
+                    df_copy['date'] = pd.to_datetime(df_copy.index).date
+                    for trade_date, group in df_copy.groupby('date'):
+                        self.data_manager.save_raw_dataframe(symbol, '15m', group.drop(columns=['date']), trade_date)
+                
                 return self.data_agent._add_indicators(df)
             return None
         except Exception as e:
@@ -614,15 +625,30 @@ class DailyBacktester:
 
 
 async def main():
+    # 导入 2026 股票池
+    from src.config.watchlist_2026 import HIGH_MOMENTUM, AI_RELATED, ALL_TICKERS
+    
     parser = argparse.ArgumentParser(description="美股日内回测系统")
-    parser.add_argument("--symbols", type=str, default="AAPL", help="股票代码，逗号分隔")
+    parser.add_argument("--symbols", type=str, help="股票代码，逗号分隔（默认：高动量股票）")
     parser.add_argument("--days", type=int, default=30, help="回测天数")
     parser.add_argument("--html", action="store_true", help="生成 HTML 报告")
     parser.add_argument("--quiet", action="store_true", help="安静模式")
+    parser.add_argument("--preset", type=str, choices=["momentum", "ai", "all"], 
+                        default="momentum", help="预设股票池: momentum(高动量), ai(AI相关), all(全部)")
     
     args = parser.parse_args()
     
-    symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    # 根据预设或自定义选择股票
+    if args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    else:
+        # 使用预设股票池
+        if args.preset == "momentum":
+            symbols = HIGH_MOMENTUM  # 默认：高动量股票
+        elif args.preset == "ai":
+            symbols = AI_RELATED[:10]  # AI 相关前 10 只
+        else:
+            symbols = ALL_TICKERS[:20]  # 全部股票前 20 只
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     
