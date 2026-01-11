@@ -1,3 +1,6 @@
+# Alpaca API (US Stocks)
+alpaca-py>=0.13.0
+
 # Binance API
 python-binance==1.0.19
 ccxt==4.2.25
