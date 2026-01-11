@@ -114,6 +114,7 @@ class DailyRecord:
     
     # 最大潜在收益 (当日OR15后最高价 - OR15 close)
     day_high_after_or15: float = 0.0
+    day_high_time: str = ""  # 最高价出现时间
     max_potential_pct: float = 0.0  # (day_high - or15_close) / or15_close * 100
     
     # 实际交易信息 (如果开仓)
@@ -133,6 +134,7 @@ class DailyRecord:
             "or15_low": self.or15_low,
             "or15_close": self.or15_close,
             "day_high_after_or15": self.day_high_after_or15,
+            "day_high_time": self.day_high_time,
             "max_potential_pct": self.max_potential_pct,
             "traded": self.traded,
             "entry_price": self.entry_price,
@@ -760,6 +762,7 @@ def save_daily_records(daily_records: Dict[date, List[DailyRecord]], output_dir:
                 "收益率": f"{record.pnl_pct:+.2f}%" if record.traded else "-",
                 "出场原因": record.exit_reason if record.traded else "-",
                 "当日最高价": f"${record.day_high_after_or15:.2f}" if record.day_high_after_or15 > 0 else "-",
+                "最高价时间": record.day_high_time if record.day_high_time else "-",
                 "最大潜在收益": f"{record.max_potential_pct:.2f}%" if record.max_potential_pct > 0 else "-",
                 "是否交易": "是" if record.traded else "否"
             })
@@ -835,12 +838,16 @@ async def run_backtest_all(
             or15_low = float(first_bar['low'])
             or15_close = float(first_bar['close'])
             
-            # 计算当日 OR15 后最高价
+            # 计算当日 OR15 后最高价及其时间
             remaining_bars = day_data.iloc[1:]  # OR15 之后的 K 线
             if len(remaining_bars) > 0:
                 day_high_after_or15 = float(remaining_bars['high'].max())
+                # 找到最高价出现的时间
+                high_idx = remaining_bars['high'].idxmax()
+                day_high_time = pd.to_datetime(high_idx).strftime("%H:%M")
             else:
                 day_high_after_or15 = or15_high
+                day_high_time = "09:45"  # OR15 时间
             
             # 最大潜在收益
             max_potential_pct = (day_high_after_or15 - or15_close) / or15_close * 100 if or15_close > 0 else 0
@@ -884,6 +891,7 @@ async def run_backtest_all(
                 or15_low=or15_low,
                 or15_close=or15_close,
                 day_high_after_or15=day_high_after_or15,
+                day_high_time=day_high_time,
                 max_potential_pct=max_potential_pct,
                 traded=traded,
                 entry_price=entry_price,
