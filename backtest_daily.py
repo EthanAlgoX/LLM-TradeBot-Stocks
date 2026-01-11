@@ -656,10 +656,11 @@ async def main():
 
 def save_daily_records(daily_records: Dict[date, List[DailyRecord]], output_dir: str):
     """
-    保存每日每股票记录到子文件夹
+    保存每日每股票记录到子文件夹，并生成汇总 CSV
     
     结构:
     output_dir/
+      daily_summary.csv           # 汇总 CSV（所有股票所有日期）
       2026-01-05/
         AAPL.json
         GOOGL.json
@@ -667,6 +668,8 @@ def save_daily_records(daily_records: Dict[date, List[DailyRecord]], output_dir:
       2026-01-06/
         ...
     """
+    all_records = []
+    
     for trade_date, records in daily_records.items():
         # 创建日期子文件夹
         date_dir = os.path.join(output_dir, str(trade_date))
@@ -677,8 +680,31 @@ def save_daily_records(daily_records: Dict[date, List[DailyRecord]], output_dir:
             filepath = os.path.join(date_dir, f"{record.symbol}.json")
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(record.to_dict(), f, indent=2, ensure_ascii=False)
+            
+            # 收集数据用于 CSV
+            all_records.append({
+                "日期": str(trade_date),
+                "股票": record.symbol,
+                "决策": record.action,
+                "决策理由": record.decision_reason,
+                "OR15收盘价": f"${record.or15_close:.2f}" if record.or15_close > 0 else "-",
+                "开仓价格": f"${record.entry_price:.2f}" if record.traded else "-",
+                "卖出价格": f"${record.exit_price:.2f}" if record.traded and record.exit_price > 0 else "-",
+                "收益率": f"{record.pnl_pct:+.2f}%" if record.traded else "-",
+                "出场原因": record.exit_reason if record.traded else "-",
+                "当日最高价": f"${record.day_high_after_or15:.2f}" if record.day_high_after_or15 > 0 else "-",
+                "最大潜在收益": f"{record.max_potential_pct:.2f}%" if record.max_potential_pct > 0 else "-",
+                "是否交易": "是" if record.traded else "否"
+            })
     
-    print(f"\n💾 每日记录已保存: {output_dir}/[日期]/[股票].json")
+    # 生成汇总 CSV
+    if all_records:
+        csv_path = os.path.join(output_dir, "daily_summary.csv")
+        df = pd.DataFrame(all_records)
+        df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+        print(f"\n💾 汇总报告已保存: {csv_path}")
+    
+    print(f"💾 每日记录已保存: {output_dir}/[日期]/[股票].json")
 
 
 async def run_backtest_all(
