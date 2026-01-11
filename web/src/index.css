@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #f8fafc;
+  background-color: #0f172a;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.card {
+  @apply bg-dark-200 rounded-xl p-6 border border-gray-800;
+}
+
+.kpi-card {
+  @apply bg-dark-200 rounded-xl p-4 text-center border border-gray-800;
+}
+
+.stock-card {
+  @apply bg-dark-200 rounded-lg p-4 border border-gray-700 hover:border-primary-500 transition-colors;
+}
+
+.positive {
+  @apply text-success;
+}
+
+.negative {
+  @apply text-danger;
+}
