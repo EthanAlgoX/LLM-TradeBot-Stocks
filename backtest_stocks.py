@@ -109,12 +109,24 @@ class StockBacktester:
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         
-        # Initialize components
+        # Initialize components - Simplified 3-Agent Framework
         from src.api.alpaca_client import AlpacaClient
-        from src.agents.quant_analyst_agent import QuantAnalystAgent
+        from src.agents.simple_agents import (
+            DataProcessorAgent, MultiPeriodAgent, DecisionAgent
+        )
         
         self.client = AlpacaClient()
-        self.analyst = QuantAnalystAgent()
+        
+        # 3 Core Agents:
+        # 1. DataProcessor: raw data → indicators
+        # 2. MultiPeriod: indicators → trend analysis
+        # 3. Decision: trend → BUY/SELL/WAIT + prices
+        self.data_processor = DataProcessorAgent()
+        self.multi_period = MultiPeriodAgent()
+        self.decision_agent = DecisionAgent(
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct
+        )
     
     def fetch_historical_data(
         self,
@@ -384,53 +396,37 @@ class StockBacktester:
         
         return result
     
-    def _generate_signal(self, df: pd.DataFrame) -> Optional[str]:
-        """Generate signal using optimized stock strategy"""
-        if len(df) < 50:
+    def _generate_signal(self, df: pd.DataFrame, symbol: str = "STOCK") -> Optional[str]:
+        """
+        Generate signal using Simplified 3-Agent Pipeline:
+        1. DataProcessorAgent: raw data → indicators
+        2. MultiPeriodAgent: indicators → trend analysis
+        3. DecisionAgent: trend → BUY/SELL/WAIT
+        """
+        if len(df) < 30:
             return None
         
         try:
-            from src.strategy.stock_strategy import StockStrategy
-            strategy = StockStrategy(
-                base_position_size=self.position_size_pct,
-                max_risk_per_trade=self.stop_loss_pct
-            )
+            # Step 1: DataProcessorAgent - add indicators
+            processed_data = self.data_processor.process(df, symbol=symbol)
             
-            setup = strategy.analyze(df, symbol='STOCK')
+            # Step 2: MultiPeriodAgent - analyze trends
+            trend_analysis = self.multi_period.analyze(processed_data)
             
-            if setup and setup.confidence >= 0.5:
-                if setup.direction == 'long':
-                    return 'buy'
-                elif setup.direction == 'short':
-                    return 'sell'
+            # Step 3: DecisionAgent - make decision
+            decision = self.decision_agent.decide(processed_data, trend_analysis)
+            
+            # Return signal
+            if decision.action == "BUY":
+                return 'buy'
+            elif decision.action == "SELL":
+                return 'sell'
+            else:
+                return None
+                
         except Exception as e:
-            # Fallback to simple strategy
-            pass
-        
-        # Fallback: Simple strategy
-        current = df.iloc[-1]
-        prev = df.iloc[-2]
-        
-        rsi = current.get('rsi', 50)
-        macd_hist = current.get('macd_hist', 0)
-        prev_macd_hist = prev.get('macd_hist', 0)
-        
-        buy_signals = 0
-        
-        if pd.notna(rsi) and rsi < 35:
-            buy_signals += 1
-        
-        if pd.notna(macd_hist) and pd.notna(prev_macd_hist):
-            if prev_macd_hist < 0 and macd_hist > 0:
-                buy_signals += 2
-        
-        if current['close'] > current.get('sma_20', 0) and pd.notna(current.get('sma_20', None)):
-            buy_signals += 1
-        
-        if buy_signals >= 2:
-            return 'buy'
-        
-        return None
+            print(f"⚠️ Signal generation error: {e}")
+            return None
     
     def _print_results(self, result: BacktestResult):
         """Print backtest results"""
