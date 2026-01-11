@@ -697,12 +697,12 @@ async def main():
     from src.config.watchlist_2026 import HIGH_MOMENTUM, AI_RELATED, ALL_TICKERS
     
     parser = argparse.ArgumentParser(description="美股日内回测系统")
-    parser.add_argument("--symbols", type=str, help="股票代码，逗号分隔（默认：高动量股票）")
+    parser.add_argument("--symbols", type=str, help="股票代码，逗号分隔（默认：所有股票）")
     parser.add_argument("--days", type=int, default=30, help="回测天数")
     parser.add_argument("--html", action="store_true", help="生成 HTML 报告")
     parser.add_argument("--quiet", action="store_true", help="安静模式")
     parser.add_argument("--preset", type=str, choices=["momentum", "ai", "all"], 
-                        default="momentum", help="预设股票池: momentum(高动量), ai(AI相关), all(全部)")
+                        default="all", help="预设股票池: momentum(高动量7只), ai(AI相关10只), all(全部股票)")
     
     args = parser.parse_args()
     
@@ -712,11 +712,11 @@ async def main():
     else:
         # 使用预设股票池
         if args.preset == "momentum":
-            symbols = HIGH_MOMENTUM  # 默认：高动量股票
+            symbols = HIGH_MOMENTUM  # 高动量股票（7只）
         elif args.preset == "ai":
             symbols = AI_RELATED[:10]  # AI 相关前 10 只
         else:
-            symbols = ALL_TICKERS[:20]  # 全部股票前 20 只
+            symbols = ALL_TICKERS  # 全部股票（91只）
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     
@@ -877,8 +877,11 @@ async def run_backtest_all(
                 # 找到最高价出现的时间（转换为美东时间）
                 high_idx = remaining_bars['high'].idxmax()
                 high_time_utc = pd.to_datetime(high_idx)
-                # 转换 UTC 到美东时间
-                high_time_et = high_time_utc.tz_localize('UTC').tz_convert(ET)
+                # 转换 UTC 到美东时间（如果已有时区信息则直接转换，否则先本地化）
+                if high_time_utc.tz is None:
+                    high_time_et = high_time_utc.tz_localize('UTC').tz_convert(ET)
+                else:
+                    high_time_et = high_time_utc.tz_convert(ET)
                 day_high_time = high_time_et.strftime("%H:%M")
             else:
                 day_high_after_or15 = or15_high
