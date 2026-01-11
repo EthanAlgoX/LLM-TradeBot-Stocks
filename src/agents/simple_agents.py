@@ -268,6 +268,11 @@ class DecisionAgent:
     Uses OR15 (Opening Range 15min) strategy for stocks.
     """
     
+    # 高波动股票列表（基于回测验证，仅保留效果显著的股票）
+    # BKKT: 80% 胜率, +23.56% 收益
+    # RCAT: 80% 胜率, 多次止盈
+    HIGH_BETA_STOCKS = ["BKKT", "RCAT"]
+    
     def __init__(
         self,
         stop_loss_pct: float = 2.0,
@@ -276,8 +281,15 @@ class DecisionAgent:
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
     
-    def decide(self, data: ProcessedData, trend: TrendAnalysis) -> TradeDecision:
-        """Make trading decision"""
+    def decide(self, data: ProcessedData, trend: TrendAnalysis, symbol: str = "") -> TradeDecision:
+        """
+        Make trading decision
+        
+        Args:
+            data: Processed market data
+            trend: Trend analysis
+            symbol: Stock symbol (for high beta detection)
+        """
         decision = TradeDecision(action="WAIT")
         
         if data.df_15m is None or len(data.df_15m) < 20:
@@ -342,13 +354,17 @@ class DecisionAgent:
             elif len(sell_signals) > len(buy_signals):
                 sell_signals.append(f"High volume ({volume_ratio:.1f}x)")
         
-        # Make decision - 降低阈值从 3 到 2 以增加交易机会
-        if len(buy_signals) >= 2:
+        # Make decision - 动态阈值（高波动股票降低要求）
+        # 高波动股票：1 个信号即可交易
+        # 普通股票：需要 2 个信号
+        required_signals = 1 if symbol in self.HIGH_BETA_STOCKS else 2
+        
+        if len(buy_signals) >= required_signals:
             decision.action = "BUY"
             decision.confidence = min(1.0, len(buy_signals) * 0.2)
             decision.detailed_reasons = buy_signals
             decision.summary_reason = f"强买入信号: {', '.join(buy_signals[:2])}"
-        elif len(sell_signals) >= 2:
+        elif len(sell_signals) >= required_signals:
             decision.action = "SELL"
             decision.confidence = min(1.0, len(sell_signals) * 0.2)
             decision.detailed_reasons = sell_signals

@@ -399,8 +399,8 @@ class DailyBacktester:
         # 趋势分析
         trend = self.trend_agent.analyze(processed)
         
-        # 决策
-        decision = self.decision_agent.decide(processed, trend)
+        # 决策（传入 symbol 用于高波动股票检测）
+        decision = self.decision_agent.decide(processed, trend, symbol=symbol)
         
         if verbose:
             print(f"\n  📅 {trade_date} | {decision.action} | {decision.summary_reason}")
@@ -411,14 +411,28 @@ class DailyBacktester:
         
         # 创建交易记录 - 使用本地计算的 entry_price，避免不一致
         entry_time = datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
+        
+        # 动态止盈：根据时间调整目标
+        # 分析显示大部分高点出现在 19:00-20:00（收盘前 1-2 小时）
+        # 早盘入场：标准止盈 4%
+        # 午盘入场：放宽止盈 5%
+        # 晚盘入场：最大化止盈 6%
+        hour = entry_time.hour
+        if hour < 15:  # 早盘（9:45-15:00）
+            take_profit_pct = 0.04  # 4%
+        elif hour < 18:  # 午盘（15:00-18:00）
+            take_profit_pct = 0.05  # 5%
+        else:  # 晚盘（18:00-20:00）
+            take_profit_pct = 0.06  # 6%
+        
         trade = BacktestTrade(
             symbol=symbol,
             trade_date=trade_date,
             entry_time=entry_time,
             entry_price=entry_price,  # 使用本地计算的入场价格
             entry_reason=decision.summary_reason,
-            stop_loss=entry_price - (entry_price * 0.02),  # 基于实际入场价计算止损
-            take_profit=entry_price + (entry_price * 0.04)  # 基于实际入场价计算止盈
+            stop_loss=entry_price - (entry_price * 0.02),  # 2% 止损
+            take_profit=entry_price + (entry_price * take_profit_pct)  # 动态止盈
         )
         
         if verbose:
@@ -427,12 +441,30 @@ class DailyBacktester:
         # 模拟后续 K 线，判断是否触发止损/止盈
         # 注意: 入场是在 9:45，即第一根 K 线收盘后
         # 所以需要从第二根 K 线 (index=1) 开始检查止损/止盈
+        
+        # 追踪止损参数
+        TRAILING_ACTIVATION_PCT = 0.02  # 盈利超过 2% 启动追踪止损
+        TRAILING_DISTANCE_PCT = 0.015   # 追踪距离 1.5%
+        trailing_stop_active = False
+        
         for i in range(1, len(day_data)):
             bar = day_data.iloc[i]
             bar_time = pd.to_datetime(bar.name)
             bar_high = float(bar['high'])
             bar_low = float(bar['low'])
             bar_close = float(bar['close'])
+            
+            # 计算当前盈亏
+            current_pnl_pct = (bar_close - entry_price) / entry_price
+            
+            # 启动追踪止损（盈利超过 2%）
+            if current_pnl_pct > TRAILING_ACTIVATION_PCT and not trailing_stop_active:
+                trailing_stop_active = True
+            
+            # 更新追踪止损（只上调，不下调）
+            if trailing_stop_active:
+                new_trailing_stop = bar_close * (1 - TRAILING_DISTANCE_PCT)
+                trade.stop_loss = max(trade.stop_loss, new_trailing_stop)
             
             # 检查止盈 (优先判断止盈)
             if bar_high >= trade.take_profit:
@@ -441,7 +473,7 @@ class DailyBacktester:
                 trade.exit_reason = "TAKE_PROFIT"
                 break
             
-            # 检查止损
+            # 检查止损（包括追踪止损）
             if bar_low <= trade.stop_loss:
                 trade.exit_time = bar_time
                 trade.exit_price = trade.stop_loss
@@ -842,12 +874,15 @@ async def run_backtest_all(
             remaining_bars = day_data.iloc[1:]  # OR15 之后的 K 线
             if len(remaining_bars) > 0:
                 day_high_after_or15 = float(remaining_bars['high'].max())
-                # 找到最高价出现的时间
+                # 找到最高价出现的时间（转换为美东时间）
                 high_idx = remaining_bars['high'].idxmax()
-                day_high_time = pd.to_datetime(high_idx).strftime("%H:%M")
+                high_time_utc = pd.to_datetime(high_idx)
+                # 转换 UTC 到美东时间
+                high_time_et = high_time_utc.tz_localize('UTC').tz_convert(ET)
+                day_high_time = high_time_et.strftime("%H:%M")
             else:
                 day_high_after_or15 = or15_high
-                day_high_time = "09:45"  # OR15 时间
+                day_high_time = "09:45"  # OR15 时间（美东）
             
             # 最大潜在收益
             max_potential_pct = (day_high_after_or15 - or15_close) / or15_close * 100 if or15_close > 0 else 0
