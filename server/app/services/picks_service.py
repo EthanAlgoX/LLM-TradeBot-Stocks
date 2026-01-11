@@ -3,18 +3,21 @@ Picks Service
 今日选股 / 昨日复盘
 """
 from datetime import date, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Literal
 import pandas as pd
 
 from app.services.session_loader import session_loader
 
 
+DataMode = Literal['live', 'backtest']
+
+
 class PicksService:
     """选股服务"""
     
-    def get_today_picks(self, preset: str = "all") -> Dict[str, Any]:
-        """获取今日选股（BUY 信号）"""
-        df = session_loader.load_daily_summary()
+    def get_today_picks(self, preset: str = "all", top_n: int = 5, mode: DataMode = 'backtest') -> Dict[str, Any]:
+        """获取今日选股（BUY 信号），只返回潜在收益最高的 Top N"""
+        df = session_loader.load_daily_summary(mode=mode)
         
         if df.empty:
             return {"date": str(date.today()), "picks": []}
@@ -27,6 +30,14 @@ class PicksService:
         action_col = '决策' if '决策' in df.columns else 'action'
         today_df = df[(df[date_col] == latest_date) & (df[action_col] == 'BUY')]
         
+        # 按潜在收益排序
+        potential_col = '最大潜在收益' if '最大潜在收益' in today_df.columns else 'max_potential_pct'
+        if potential_col in today_df.columns:
+            today_df = today_df.sort_values(by=potential_col, ascending=False)
+        
+        # 只取 Top N
+        today_df = today_df.head(top_n)
+        
         picks = []
         for _, row in today_df.iterrows():
             picks.append(self._row_to_pick(row))
@@ -36,9 +47,9 @@ class PicksService:
             "picks": picks
         }
     
-    def get_yesterday_recap(self, preset: str = "all") -> Dict[str, Any]:
+    def get_yesterday_recap(self, preset: str = "all", mode: DataMode = 'backtest') -> Dict[str, Any]:
         """获取昨日复盘（已完成交易）"""
-        trades_df = session_loader.load_trades_summary()
+        trades_df = session_loader.load_trades_summary(mode=mode)
         
         if trades_df.empty:
             return {"date": None, "trades": []}

@@ -6,12 +6,15 @@ import os
 import json
 import pandas as pd
 from datetime import datetime, date
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Literal
 from pathlib import Path
 
 
+DataMode = Literal['live', 'backtest']
+
+
 class SessionLoader:
-    """加载回测 session 数据"""
+    """加载回测/实盘 session 数据"""
     
     def __init__(self, base_path: str = None):
         if base_path is None:
@@ -19,33 +22,41 @@ class SessionLoader:
             base_path = os.path.join(
                 os.path.dirname(__file__), 
                 "..", "..", "..", 
-                "data", "backtest_results"
+                "data"
             )
-        self.base_path = Path(base_path).resolve()
+        self.data_path = Path(base_path).resolve()
     
-    def get_latest_session(self) -> Optional[str]:
+    def _get_base_path(self, mode: DataMode = 'backtest') -> Path:
+        """根据 mode 返回对应的数据目录"""
+        if mode == 'live':
+            return self.data_path / "live_results"
+        else:
+            return self.data_path / "backtest_results"
+    
+    def get_latest_session(self, mode: DataMode = 'backtest') -> Optional[str]:
         """获取最新的 session 目录名"""
-        if not self.base_path.exists():
+        base_path = self._get_base_path(mode)
+        if not base_path.exists():
             return None
         
         sessions = sorted([
-            d.name for d in self.base_path.iterdir() 
+            d.name for d in base_path.iterdir() 
             if d.is_dir() and d.name[0].isdigit()
         ], reverse=True)
         
         return sessions[0] if sessions else None
     
-    def get_session_path(self, session: str = None) -> Optional[Path]:
+    def get_session_path(self, session: str = None, mode: DataMode = 'backtest') -> Optional[Path]:
         """获取 session 目录路径"""
         if session is None:
-            session = self.get_latest_session()
+            session = self.get_latest_session(mode)
         if session is None:
             return None
-        return self.base_path / session
+        return self._get_base_path(mode) / session
     
-    def load_daily_summary(self, session: str = None) -> pd.DataFrame:
+    def load_daily_summary(self, session: str = None, mode: DataMode = 'backtest') -> pd.DataFrame:
         """加载 daily_summary.csv"""
-        session_path = self.get_session_path(session)
+        session_path = self.get_session_path(session, mode)
         if session_path is None:
             return pd.DataFrame()
         
@@ -55,9 +66,9 @@ class SessionLoader:
         
         return pd.read_csv(csv_path, encoding='utf-8-sig')
     
-    def load_trades_summary(self, session: str = None) -> pd.DataFrame:
+    def load_trades_summary(self, session: str = None, mode: DataMode = 'backtest') -> pd.DataFrame:
         """加载 trades_summary.csv"""
-        session_path = self.get_session_path(session)
+        session_path = self.get_session_path(session, mode)
         if session_path is None:
             return pd.DataFrame()
         
@@ -68,9 +79,9 @@ class SessionLoader:
         
         return pd.DataFrame()
     
-    def load_traded_stocks_summary(self, session: str = None) -> Dict[str, Any]:
+    def load_traded_stocks_summary(self, session: str = None, mode: DataMode = 'backtest') -> Dict[str, Any]:
         """加载 traded_stocks_summary.json"""
-        session_path = self.get_session_path(session)
+        session_path = self.get_session_path(session, mode)
         if session_path is None:
             return {}
         
@@ -81,9 +92,9 @@ class SessionLoader:
         with open(json_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     
-    def load_day_records(self, trade_date: date, session: str = None) -> List[Dict]:
+    def load_day_records(self, trade_date: date, session: str = None, mode: DataMode = 'backtest') -> List[Dict]:
         """加载某一天的所有股票记录"""
-        session_path = self.get_session_path(session)
+        session_path = self.get_session_path(session, mode)
         if session_path is None:
             return []
         
@@ -101,9 +112,9 @@ class SessionLoader:
         
         return records
     
-    def get_trading_days(self, session: str = None) -> List[str]:
+    def get_trading_days(self, session: str = None, mode: DataMode = 'backtest') -> List[str]:
         """获取 session 中的所有交易日"""
-        session_path = self.get_session_path(session)
+        session_path = self.get_session_path(session, mode)
         if session_path is None:
             return []
         

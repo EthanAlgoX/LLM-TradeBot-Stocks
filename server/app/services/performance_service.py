@@ -3,10 +3,13 @@ Performance Service
 计算 7 日滚动收益、胜率等 KPI
 """
 from datetime import date, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Literal
 import pandas as pd
 
 from app.services.session_loader import session_loader
+
+
+DataMode = Literal['live', 'backtest']
 
 
 class PerformanceService:
@@ -15,7 +18,8 @@ class PerformanceService:
     def get_rolling_performance(
         self, 
         days: int = 7, 
-        preset: str = "all"
+        preset: str = "all",
+        mode: DataMode = "backtest"
     ) -> Dict[str, Any]:
         """
         获取滚动 N 日收益数据
@@ -29,22 +33,28 @@ class PerformanceService:
             }
         """
         # 加载数据
-        df = session_loader.load_daily_summary()
-        trades_df = session_loader.load_trades_summary()
+        df = session_loader.load_daily_summary(mode=mode)
+        trades_df = session_loader.load_trades_summary(mode=mode)
         
         if df.empty:
             return self._empty_response(days)
         
         # 获取最近 N 个交易日
-        trading_days = session_loader.get_trading_days()[:days]
+        trading_days = session_loader.get_trading_days(mode=mode)[:days]
         
         if not trading_days:
             return self._empty_response(days)
+        
+        # 每只股票投资金额和每日最大股票数
+        INVESTMENT_PER_STOCK = 10000  # $10,000 per stock
+        MAX_STOCKS_PER_DAY = 5        # Top 5 stocks per day
+        DAILY_CAPITAL = INVESTMENT_PER_STOCK * MAX_STOCKS_PER_DAY  # $50,000
         
         # 计算每日收益
         daily_data = []
         total_trades = 0
         total_wins = 0
+        total_profit_usd = 0  # 总盈利金额
         
         for day_str in trading_days:
             # 尝试匹配日期列
@@ -67,12 +77,21 @@ class PerformanceService:
                         break
                 
                 if pnl_col:
-                    pnls = day_trades[pnl_col].apply(self._parse_pct)
-                    daily_return = pnls.sum()
+                    pnls = day_trades[pnl_col].apply(self._parse_pct)  # 百分比值, e.g. 2.5 表示 2.5%
                     wins = (pnls > 0).sum()
+                    
+                    # 计算每只股票的盈利金额 = $10,000 * (收益率/100)
+                    # 然后汇总当日所有股票盈利
+                    daily_profit_usd = sum(INVESTMENT_PER_STOCK * (pnl / 100) for pnl in pnls)
+                    
+                    # 日收益率 = 当日盈利 / 每日投入资金 ($50,000)
+                    daily_return = daily_profit_usd / DAILY_CAPITAL
+                    
+                    total_profit_usd += daily_profit_usd
                 else:
                     daily_return = 0
                     wins = 0
+                    daily_profit_usd = 0
                 
                 total_trades += trades_count
                 total_wins += wins
@@ -103,7 +122,7 @@ class PerformanceService:
             
             daily_data.append({
                 "date": day_str,
-                "daily_return": daily_return / 100,  # 转为小数
+                "daily_return": daily_return,  # 已经是小数形式
                 "trades": trades_count,
                 "win_rate": wins / trades_count if trades_count > 0 else 0,
                 "top_winner": top_winner,
@@ -121,6 +140,7 @@ class PerformanceService:
         daily_data.reverse()
         
         # 计算 KPI
+        # 总收益率 = 累计盈利 / 每日投入资金
         total_return = sum(d["daily_return"] for d in daily_data)
         avg_daily = total_return / len(daily_data) if daily_data else 0
         win_rate = total_wins / total_trades if total_trades > 0 else 0

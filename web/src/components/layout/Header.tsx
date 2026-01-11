@@ -1,6 +1,7 @@
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart3, Calendar, Clock, TrendingUp, Languages } from 'lucide-react'
+import { BarChart3, Calendar, Clock, TrendingUp, Languages, Activity, FlaskConical } from 'lucide-react'
 import { useI18n } from '../../stores/i18n.store'
+import { useModeStore } from '../../stores/mode.store'
 
 const navItems = [
     { path: '/', label: 'dashboard', icon: BarChart3 },
@@ -11,6 +12,7 @@ const navItems = [
 export default function Header() {
     const location = useLocation()
     const { language, setLanguage, t } = useI18n()
+    const { mode, toggleMode } = useModeStore()
 
     return (
         <header className="bg-dark-200 border-b border-gray-800">
@@ -41,6 +43,19 @@ export default function Header() {
                                 )
                             })}
                         </nav>
+
+                        {/* Mode Toggle */}
+                        <button
+                            onClick={toggleMode}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${mode === 'live'
+                                    ? 'bg-green-600/20 text-green-400 border border-green-600/50 hover:bg-green-600/30'
+                                    : 'bg-blue-600/20 text-blue-400 border border-blue-600/50 hover:bg-blue-600/30'
+                                }`}
+                            title="Switch Data Mode"
+                        >
+                            {mode === 'live' ? <Activity className="w-4 h-4" /> : <FlaskConical className="w-4 h-4" />}
+                            <span className="text-sm font-medium">{t(mode as any)}</span>
+                        </button>
 
                         {/* Language Switcher */}
                         <button

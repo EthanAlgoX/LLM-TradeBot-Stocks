@@ -1,8 +1,12 @@
 import useSWR from 'swr'
 import { fetchYesterdayRecap, Trade } from '../utils/api'
+import { useI18n } from '../stores/i18n.store'
+import { useModeStore } from '../stores/mode.store'
 
 export default function Yesterday() {
-    const { data, error, isLoading } = useSWR('/recap/yesterday', () => fetchYesterdayRecap())
+    const { t } = useI18n()
+    const { mode } = useModeStore()
+    const { data, error, isLoading } = useSWR(['/recap/yesterday', mode], () => fetchYesterdayRecap('all', mode))
 
     if (isLoading) {
         return <div className="flex items-center justify-center h-64">
@@ -20,18 +24,18 @@ export default function Yesterday() {
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold text-white">📋 Yesterday's Recap</h1>
+                <h1 className="text-2xl font-bold text-white">📋 {t('yesterdayRecapTitle')}</h1>
                 <span className="text-gray-400">{data?.date}</span>
             </div>
 
             {/* Summary Cards */}
             <div className="grid grid-cols-4 gap-4">
                 <div className="kpi-card">
-                    <div className="text-gray-400 text-sm">Total Trades</div>
+                    <div className="text-gray-400 text-sm">{t('totalTrades')}</div>
                     <div className="text-2xl font-bold text-white">{summary.total}</div>
                 </div>
                 <div className="kpi-card">
-                    <div className="text-gray-400 text-sm">Wins / Losses</div>
+                    <div className="text-gray-400 text-sm">{t('wins')} / {t('losses')}</div>
                     <div className="text-2xl font-bold">
                         <span className="positive">{summary.wins}</span>
                         <span className="text-gray-500"> / </span>
@@ -39,11 +43,11 @@ export default function Yesterday() {
                     </div>
                 </div>
                 <div className="kpi-card">
-                    <div className="text-gray-400 text-sm">Win Rate</div>
+                    <div className="text-gray-400 text-sm">{t('winRate')}</div>
                     <div className="text-2xl font-bold text-white">{(summary.win_rate * 100).toFixed(1)}%</div>
                 </div>
                 <div className="kpi-card">
-                    <div className="text-gray-400 text-sm">Total PnL</div>
+                    <div className="text-gray-400 text-sm">{t('pnl')}</div>
                     <div className={`text-2xl font-bold ${summary.total_pnl_pct >= 0 ? 'positive' : 'negative'}`}>
                         {summary.total_pnl_pct >= 0 ? '+' : ''}{summary.total_pnl_pct}%
                     </div>
@@ -52,21 +56,21 @@ export default function Yesterday() {
 
             {/* Trades Table */}
             <div className="card overflow-hidden">
-                <h2 className="text-lg font-semibold text-white mb-4">Trade Details</h2>
+                <h2 className="text-lg font-semibold text-white mb-4">{t('tradeDetails')}</h2>
 
                 {trades.length === 0 ? (
-                    <p className="text-gray-400 text-center py-8">No trades yesterday</p>
+                    <p className="text-gray-400 text-center py-8">{t('noTradesYesterday')}</p>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full">
                             <thead>
                                 <tr className="text-left text-gray-400 text-sm border-b border-gray-700">
-                                    <th className="pb-3 font-medium">Symbol</th>
-                                    <th className="pb-3 font-medium">Entry</th>
-                                    <th className="pb-3 font-medium">Exit</th>
-                                    <th className="pb-3 font-medium">PnL</th>
-                                    <th className="pb-3 font-medium">Exit Reason</th>
-                                    <th className="pb-3 font-medium">Duration</th>
+                                    <th className="pb-3 font-medium">{t('symbol')}</th>
+                                    <th className="pb-3 font-medium">{t('entry')}</th>
+                                    <th className="pb-3 font-medium">{t('exit')}</th>
+                                    <th className="pb-3 font-medium">{t('pnl')}</th>
+                                    <th className="pb-3 font-medium">{t('exitReason')}</th>
+                                    <th className="pb-3 font-medium">{t('duration')}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -80,8 +84,8 @@ export default function Yesterday() {
                                         </td>
                                         <td className="py-3">
                                             <span className={`px-2 py-1 rounded text-xs ${trade.exit_reason === 'TAKE_PROFIT' ? 'bg-green-600/20 text-green-400' :
-                                                    trade.exit_reason === 'STOP_LOSS' ? 'bg-red-600/20 text-red-400' :
-                                                        'bg-gray-600/20 text-gray-400'
+                                                trade.exit_reason === 'STOP_LOSS' ? 'bg-red-600/20 text-red-400' :
+                                                    'bg-gray-600/20 text-gray-400'
                                                 }`}>
                                                 {trade.exit_reason}
                                             </span>

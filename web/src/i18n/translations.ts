@@ -45,6 +45,10 @@ export const translations = {
         buy: "BUY",
         sell: "SELL",
         wait: "WAIT",
+
+        // Mode
+        live: "Live",
+        backtest: "Backtest",
     },
 
     zh: {
@@ -93,7 +97,42 @@ export const translations = {
         buy: "买入",
         sell: "卖出",
         wait: "观望",
+
+        // Mode
+        live: "实盘",
+        backtest: "回测",
     }
+}
+
+// Reason translation mapping (for dynamic data)
+export const reasonTranslations: Record<string, { en: string; zh: string }> = {
+    // Common reasons
+    "Breakout pattern detected": { en: "Breakout pattern detected", zh: "突破形态确认" },
+    "No clear signal": { en: "No clear signal", zh: "无明确信号" },
+    "符合突破条件": { en: "Breakout pattern detected", zh: "符合突破条件" },
+    "无明确信号": { en: "No clear signal", zh: "无明确信号" },
+    "非 TOP5": { en: "Not in Top 5", zh: "非 TOP5" },
+    "趋势向上+突破OR15": { en: "Uptrend + OR15 breakout", zh: "趋势向上+突破OR15" },
+    "突破OR15高点": { en: "OR15 high breakout", zh: "突破OR15高点" },
+    "动量强劲": { en: "Strong momentum", zh: "动量强劲" },
+    "成交量放大": { en: "Volume surge", zh: "成交量放大" },
+    "强买入信号": { en: "Strong buy signal", zh: "强买入信号" },
+    "买入信号": { en: "Buy signal", zh: "买入信号" },
+    "趋势向上": { en: "Uptrend", zh: "趋势向上" },
+    "趋势向下": { en: "Downtrend", zh: "趋势向下" },
+    "横盘整理": { en: "Consolidation", zh: "横盘整理" },
+    "突破确认": { en: "Breakout confirmed", zh: "突破确认" },
+    "回调买入": { en: "Buy on pullback", zh: "回调买入" },
+    "止损触发": { en: "Stop loss triggered", zh: "止损触发" },
+    "止盈触发": { en: "Take profit triggered", zh: "止盈触发" },
+}
+
+export function translateReason(reason: string, lang: Language): string {
+    const mapping = reasonTranslations[reason]
+    if (mapping) {
+        return mapping[lang]
+    }
+    return reason // Return original if no translation found
 }
 
 export type Language = 'en' | 'zh'

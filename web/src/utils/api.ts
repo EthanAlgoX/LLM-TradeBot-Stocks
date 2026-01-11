@@ -5,6 +5,8 @@ const api = axios.create({
     timeout: 10000,
 })
 
+export type DataMode = 'live' | 'backtest'
+
 export interface KPI {
     total_return_pct: number
     avg_daily_return_pct: number
@@ -55,24 +57,25 @@ export interface DashboardData {
     }
 }
 
-export async function fetchDashboard(preset: string = 'all'): Promise<DashboardData> {
-    const { data } = await api.get<DashboardData>('/dashboard', { params: { preset } })
+export async function fetchDashboard(preset: string = 'all', mode: DataMode = 'backtest'): Promise<DashboardData> {
+    const { data } = await api.get<DashboardData>('/dashboard', { params: { preset, mode } })
     return data
 }
 
-export async function fetchTodayPicks(preset: string = 'all') {
-    const { data } = await api.get('/picks/today', { params: { preset } })
+export async function fetchTodayPicks(preset: string = 'all', mode: DataMode = 'backtest') {
+    const { data } = await api.get('/picks/today', { params: { preset, mode } })
     return data
 }
 
-export async function fetchYesterdayRecap(preset: string = 'all') {
-    const { data } = await api.get('/recap/yesterday', { params: { preset } })
+export async function fetchYesterdayRecap(preset: string = 'all', mode: DataMode = 'backtest') {
+    const { data } = await api.get('/recap/yesterday', { params: { preset, mode } })
     return data
 }
 
-export async function fetchRollingPerformance(days: number = 7, preset: string = 'all') {
-    const { data } = await api.get('/performance/rolling', { params: { days, preset } })
+export async function fetchRollingPerformance(days: number = 7, preset: string = 'all', mode: DataMode = 'backtest') {
+    const { data } = await api.get('/performance/rolling', { params: { days, preset, mode } })
     return data
 }
 
 export default api
+

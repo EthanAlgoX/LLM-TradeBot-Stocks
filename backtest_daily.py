@@ -1046,7 +1046,7 @@ async def run_backtest_all(
                     exit_reason = ""
             else:
                 action = sig['action']
-                decision_reason = sig['reason'] if sig['action'] == 'WAIT' else f"非 TOP{MAX_DAILY_TRADES}"
+                decision_reason = sig['reason']  # 保留原始决策理由
                 traded = False
                 entry_price = exit_price = pnl_pct = 0
                 exit_reason = ""

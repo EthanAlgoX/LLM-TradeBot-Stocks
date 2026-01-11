@@ -6,10 +6,12 @@ import {
 import { TrendingUp, TrendingDown, BarChart3, Target, Zap } from 'lucide-react'
 import { fetchDashboard, DashboardData } from '../utils/api'
 import { useI18n } from '../stores/i18n.store'
+import { useModeStore } from '../stores/mode.store'
 
 export default function Dashboard() {
     const { t } = useI18n()
-    const { data, error, isLoading } = useSWR<DashboardData>('/dashboard', () => fetchDashboard())
+    const { mode } = useModeStore()
+    const { data, error, isLoading } = useSWR<DashboardData>(['/dashboard', mode], () => fetchDashboard('all', mode))
 
     if (isLoading) {
         return <div className="flex items-center justify-center h-64">
@@ -84,7 +86,7 @@ export default function Dashboard() {
                 {/* Today Picks */}
                 <div className="card">
                     <h2 className="text-lg font-semibold text-white mb-4">🎯 {t('todayPicks')} ({data.today_picks.length})</h2>
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
                         {data.today_picks.length === 0 ? (
                             <p className="text-gray-400">{t('noPicksToday')}</p>
                         ) : (
@@ -113,7 +115,7 @@ export default function Dashboard() {
                             ({data.yesterday_summary.total_pnl_pct >= 0 ? '+' : ''}{data.yesterday_summary.total_pnl_pct}%)
                         </span>
                     </h2>
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
                         {data.yesterday_recap.length === 0 ? (
                             <p className="text-gray-400">{t('noTradesYesterday')}</p>
                         ) : (
