@@ -1025,7 +1025,7 @@ async def run_backtest_all(
                         bar_time = bar_time.tz_convert(ET)
                     input_bars.append({
                         "date": str(bar['date']) if 'date' in bar else "",
-                        "time": bar_time.strftime("%Y-%m-%d %H:%M") if hasattr(bar_time, 'strftime') else str(bar_time),
+                        "time": bar_time.strftime("%Y-%m-%d %H:%M:%S") if hasattr(bar_time, 'strftime') else str(bar_time),
                         "open": float(bar['open']),
                         "high": float(bar['high']),
                         "low": float(bar['low']),
@@ -1046,7 +1046,7 @@ async def run_backtest_all(
                 last_hist_time = pd.to_datetime(historical_15m.index[-1])
                 if last_hist_time.tz is not None:
                     last_hist_time = last_hist_time.tz_convert(ET)
-                indicators['_data_as_of'] = last_hist_time.strftime("%Y-%m-%d %H:%M")
+                indicators['_data_as_of'] = last_hist_time.strftime("%Y-%m-%d %H:%M:%S")
             
             # 获取多周期偏向 (使用 trade_date 之前的数据)
             weekly_bias = ""

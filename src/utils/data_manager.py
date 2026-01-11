@@ -104,10 +104,11 @@ class DataManager:
         df_copy = df.copy()
         df_copy = df_copy.reset_index()
         
-        # 处理时间戳
+        # 处理时间戳：统一格式为 YYYY-MM-DD HH:MM:SS (无时区后缀)
         for col in df_copy.columns:
-            if df_copy[col].dtype == 'datetime64[ns]' or 'timestamp' in col.lower():
-                df_copy[col] = df_copy[col].astype(str)
+            if df_copy[col].dtype == 'datetime64[ns]' or 'timestamp' in col.lower() or col == 'index':
+                # 转换为无时区格式
+                df_copy[col] = pd.to_datetime(df_copy[col]).dt.strftime('%Y-%m-%d %H:%M:%S')
         
         bars = df_copy.to_dict('records')
         return self.save_raw_bars(symbol, interval, bars, trade_date)
