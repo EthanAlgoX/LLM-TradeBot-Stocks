@@ -109,7 +109,7 @@ class DataProcessorAgent:
         # EMA
         df['ema_9'] = df['close'].ewm(span=9).mean()
         df['ema_21'] = df['close'].ewm(span=21).mean()
-        df['ema_50'] = df['close'].ewm(span=50).mean() if len(df) >= 50 else df['close']
+        df['ema_50'] = df['close'].ewm(span=50).mean() if len(df) >= 50 else np.nan
         
         # MACD
         ema_12 = df['close'].ewm(span=12).mean()
@@ -295,8 +295,9 @@ class DecisionAgent:
         # Calculate stops
         atr = float(current.get('atr', current_price * 0.02)) if pd.notna(current.get('atr')) else current_price * 0.02
         
+        # 改进盈亏比为 2:1 (止盈 3 ATR，止损 1.5 ATR)
         decision.stop_loss = current_price - (atr * 1.5)
-        decision.take_profit = current_price + (atr * 2.5)
+        decision.take_profit = current_price + (atr * 3.0)  # 改为 3x ATR
         
         # Collect signals
         buy_signals = []
@@ -311,9 +312,9 @@ class DecisionAgent:
         # 2. RSI
         rsi = current.get('rsi', 50)
         if pd.notna(rsi):
-            if rsi < 35:
+            if rsi < 30:  # 标准超卖阈值
                 buy_signals.append(f"RSI oversold ({rsi:.1f})")
-            elif rsi > 70:
+            elif rsi > 70:  # 标准超买阈值
                 sell_signals.append(f"RSI overbought ({rsi:.1f})")
         
         # 3. MACD crossover
@@ -341,13 +342,13 @@ class DecisionAgent:
             elif len(sell_signals) > len(buy_signals):
                 sell_signals.append(f"High volume ({volume_ratio:.1f}x)")
         
-        # Make decision
-        if len(buy_signals) >= 3:
+        # Make decision - 降低阈值从 3 到 2 以增加交易机会
+        if len(buy_signals) >= 2:
             decision.action = "BUY"
             decision.confidence = min(1.0, len(buy_signals) * 0.2)
             decision.detailed_reasons = buy_signals
             decision.summary_reason = f"强买入信号: {', '.join(buy_signals[:2])}"
-        elif len(sell_signals) >= 3:
+        elif len(sell_signals) >= 2:
             decision.action = "SELL"
             decision.confidence = min(1.0, len(sell_signals) * 0.2)
             decision.detailed_reasons = sell_signals

@@ -396,16 +396,16 @@ class DailyBacktester:
         if decision.action != 'BUY':
             return None
         
-        # 创建交易记录
+        # 创建交易记录 - 使用本地计算的 entry_price，避免不一致
         entry_time = datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
         trade = BacktestTrade(
             symbol=symbol,
             trade_date=trade_date,
             entry_time=entry_time,
-            entry_price=decision.entry_price,
+            entry_price=entry_price,  # 使用本地计算的入场价格
             entry_reason=decision.summary_reason,
-            stop_loss=decision.stop_loss,
-            take_profit=decision.take_profit
+            stop_loss=entry_price - (entry_price * 0.02),  # 基于实际入场价计算止损
+            take_profit=entry_price + (entry_price * 0.04)  # 基于实际入场价计算止盈
         )
         
         if verbose:
@@ -442,20 +442,21 @@ class DailyBacktester:
             trade.exit_price = float(last_bar['close'])
             trade.exit_reason = "MARKET_CLOSE"
         
-        # 计算盈亏
+        # 计算盈亏 (包含滑点模拟)
+        SLIPPAGE_PCT = 0.001  # 0.1% 滑点
         trade.pnl = trade.exit_price - trade.entry_price
-        trade.pnl_pct = (trade.pnl / trade.entry_price) * 100
+        trade.pnl_pct = (trade.pnl / trade.entry_price) * 100 - SLIPPAGE_PCT * 100  # 扣除滑点
         
-        # 计算持仓时间 (基于 K 线数量，每根 15 分钟)
-        # 找到入场后的第一根 K 线和出场 K 线的索引差
-        exit_bar_time = trade.exit_time
-        entry_bar_time = pd.to_datetime(day_data.iloc[0].name)  # OR15 bar
-        
-        # 简化计算: 从入场 (9:45) 到出场的分钟数
-        # 将两个时间都转换为 minutes since midnight ET
-        exit_minutes = (exit_bar_time.hour * 60 + exit_bar_time.minute) + 15  # bar 结束时间
-        entry_minutes = 9 * 60 + 45  # 9:45 AM ET
-        trade.holding_minutes = exit_minutes - entry_minutes
+        # 计算持仓时间 - 使用时间差避免时区问题
+        # 注意: exit_time 和 entry_time 都是 timezone-aware
+        if trade.exit_time and trade.entry_time:
+            # 使用 pd.Timestamp 确保时区一致性
+            exit_ts = pd.Timestamp(trade.exit_time)
+            entry_ts = pd.Timestamp(trade.entry_time)
+            holding_delta = exit_ts - entry_ts
+            trade.holding_minutes = max(0, int(holding_delta.total_seconds() / 60))
+        else:
+            trade.holding_minutes = 0
         
         if verbose:
             emoji = "✅" if trade.pnl >= 0 else "❌"
