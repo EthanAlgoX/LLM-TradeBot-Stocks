@@ -80,6 +80,15 @@ class Config:
         base_url = os.getenv('ANTHROPIC_BASE_URL') or os.getenv('LLM_BASE_URL')
         if base_url:
             self._config['llm']['base_url'] = base_url
+        
+        # Alpaca (US Stocks)
+        if 'alpaca' not in self._config:
+            self._config['alpaca'] = {}
+        if os.getenv('ALPACA_API_KEY'):
+            self._config['alpaca']['api_key'] = os.getenv('ALPACA_API_KEY')
+        if os.getenv('ALPACA_SECRET_KEY'):
+            self._config['alpaca']['secret_key'] = os.getenv('ALPACA_SECRET_KEY')
+        self._config['alpaca']['paper'] = os.getenv('ALPACA_PAPER', 'true').lower() == 'true'
     
     def get(self, key_path: str, default=None):
         """

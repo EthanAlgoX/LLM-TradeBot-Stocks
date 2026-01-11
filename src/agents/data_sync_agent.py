@@ -9,6 +9,8 @@
 优化点：
 - 并发IO，节省60%时间
 - 双视图数据，解决滞后问题
+
+Updated: 2026-01-11 - Now uses Alpaca API for stocks via MarketClient
 """
 
 import asyncio
@@ -17,11 +19,13 @@ from datetime import datetime
 from typing import Dict, List, Tuple
 from dataclasses import dataclass, field
 
-from src.api.binance_client import BinanceClient
+# Use unified MarketClient (Alpaca-based for stocks)
+from src.api.market_client import MarketClient as BinanceClient
 from src.api.quant_client import quant_client
 from src.utils.logger import log
 from src.utils.oi_tracker import oi_tracker
 from src.utils.kline_cache import get_kline_cache
+
 
 
 @dataclass
@@ -484,7 +488,7 @@ async def test_data_sync_agent():
     
     # 测试1: 并发获取数据
     print("\n[测试1] 并发获取多周期数据...")
-    snapshot = await agent.fetch_all_timeframes("BTCUSDT")
+    snapshot = await agent.fetch_all_timeframes("AAPL")
     
     print(f"\n✅ 数据获取成功")
     print(f"  - 耗时: {snapshot.fetch_duration:.2f}秒")

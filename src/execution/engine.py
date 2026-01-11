@@ -2,7 +2,7 @@
 执行指挥官 (The Executor) 模块
 """
 from typing import Dict, Optional, List
-from src.api.binance_client import BinanceClient
+from src.api.market_client import MarketClient as BinanceClient
 from src.risk.manager import RiskManager
 from src.utils.logger import log
 from datetime import datetime

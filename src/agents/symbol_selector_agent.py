@@ -178,7 +178,7 @@ class SymbolSelectorAgent:
     async def _get_expanded_candidates(self) -> List[str]:
         """Get AI500 Top 10 + Major coins by 24h volume"""
         try:
-            from src.api.binance_client import BinanceClient
+            from src.api.market_client import MarketClient as BinanceClient
             
             client = BinanceClient()
             tickers = client.get_all_tickers()

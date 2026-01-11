@@ -17,6 +17,8 @@ Date: 2026-01-11
 """
 
 import argparse
+import json
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -39,6 +41,20 @@ class Trade:
     pnl: float = 0.0
     pnl_pct: float = 0.0
     reason: str = ""
+    
+    def to_dict(self) -> Dict:
+        return {
+            'symbol': self.symbol,
+            'side': self.side,
+            'entry_time': self.entry_time.isoformat() if self.entry_time else None,
+            'entry_price': self.entry_price,
+            'exit_time': self.exit_time.isoformat() if self.exit_time else None,
+            'exit_price': self.exit_price,
+            'quantity': self.quantity,
+            'pnl': self.pnl,
+            'pnl_pct': self.pnl_pct,
+            'reason': self.reason
+        }
 
 
 @dataclass 
@@ -56,6 +72,22 @@ class BacktestResult:
     max_drawdown: float
     sharpe_ratio: float
     trades: List[Trade]
+    
+    def to_dict(self) -> Dict:
+        return {
+            'symbol': self.symbol,
+            'start_date': self.start_date.isoformat(),
+            'end_date': self.end_date.isoformat(),
+            'initial_capital': self.initial_capital,
+            'final_capital': self.final_capital,
+            'total_return': self.total_return,
+            'total_return_pct': self.total_return_pct,
+            'num_trades': self.num_trades,
+            'win_rate': self.win_rate,
+            'max_drawdown': self.max_drawdown,
+            'sharpe_ratio': self.sharpe_ratio,
+            'trades': [t.to_dict() for t in self.trades]
+        }
 
 
 class StockBacktester:
@@ -426,6 +458,37 @@ class StockBacktester:
                 print(f"  {t.entry_time.strftime('%m-%d')} → {exit_time_str}: "
                       f"${t.entry_price:.2f} → {exit_price_str} | "
                       f"{sign}${t.pnl:.2f} ({sign}{t.pnl_pct:.1f}%) [{t.reason}]")
+    
+    def save_results(self, result: BacktestResult, session_dir: str):
+        """
+        Save backtest results to structured file system
+        
+        Structure:
+        data/backtest_cache/{session_datetime}/
+            ├── summary.json  (overall session summary)
+            └── {date}_{symbol}.json  (per-stock results)
+        
+        Args:
+            result: BacktestResult object
+            session_dir: Session directory path
+        """
+        # Create session directory if not exists
+        os.makedirs(session_dir, exist_ok=True)
+        
+        # Generate per-stock filename: {date}_{symbol}.json
+        date_str = result.start_date.strftime('%Y%m%d')
+        symbol_file = os.path.join(session_dir, f"{date_str}_{result.symbol}.json")
+        
+        # Save per-stock result
+        result_data = result.to_dict()
+        result_data['saved_at'] = datetime.now().isoformat()
+        
+        with open(symbol_file, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"💾 Results saved: {symbol_file}")
+        
+        return symbol_file
 
 
 def main():
@@ -433,12 +496,19 @@ def main():
     parser.add_argument("--symbol", type=str, default="AAPL", help="Single symbol to backtest")
     parser.add_argument("--symbols", type=str, help="Comma-separated symbols")
     parser.add_argument("--interval", type=str, default="1d", help="Timeframe (1d, 1h, 15m)")
-    parser.add_argument("--days", type=int, default=30, help="Days of history")
+    parser.add_argument("--days", type=int, default=60, help="Days of history")
     parser.add_argument("--capital", type=float, default=10000, help="Initial capital")
     
     args = parser.parse_args()
     
     symbols = args.symbols.split(",") if args.symbols else [args.symbol]
+    
+    # Create session directory: data/backtest_cache/{datetime}/
+    session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    session_dir = os.path.join('data', 'backtest_cache', session_time)
+    os.makedirs(session_dir, exist_ok=True)
+    
+    print(f"\n📂 Session directory: {session_dir}")
     
     backtester = StockBacktester(
         initial_capital=args.capital,
@@ -447,12 +517,33 @@ def main():
         take_profit_pct=4.0
     )
     
+    results = []
     for symbol in symbols:
         symbol = symbol.strip()
         try:
-            backtester.run_backtest(symbol, args.interval, args.days)
+            result = backtester.run_backtest(symbol, args.interval, args.days)
+            if result:
+                # Save result to session directory
+                backtester.save_results(result, session_dir)
+                results.append(result)
         except Exception as e:
             print(f"❌ Error backtesting {symbol}: {e}")
+    
+    # Save session summary
+    if results:
+        summary = {
+            'session_time': session_time,
+            'symbols': [r.symbol for r in results],
+            'interval': args.interval,
+            'days': args.days,
+            'capital': args.capital,
+            'total_return_pct': sum(r.total_return_pct for r in results) / len(results),
+            'total_trades': sum(r.num_trades for r in results)
+        }
+        summary_file = os.path.join(session_dir, 'summary.json')
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        print(f"\n📊 Session summary saved: {summary_file}")
 
 
 if __name__ == "__main__":
