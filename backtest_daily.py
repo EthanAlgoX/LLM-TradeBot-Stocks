@@ -85,11 +85,15 @@ class BacktestTrade:
     pnl_pct: float = 0.0
     holding_minutes: int = 0
     
+    # 详细流程数据
+    process_data: Dict[str, Any] = field(default_factory=dict)
+    decision_process: Dict[str, Any] = field(default_factory=dict)
+    
     def to_dict(self) -> Dict:
         return {
             "symbol": self.symbol,
             "trade_date": str(self.trade_date),
-            "entry_time": self.entry_time.isoformat() if self.entry_time else None,
+            "entry_time": self.entry_time.isoformat(),
             "entry_price": self.entry_price,
             "entry_reason": self.entry_reason,
             "exit_time": self.exit_time.isoformat() if self.exit_time else None,
@@ -99,8 +103,13 @@ class BacktestTrade:
             "take_profit": self.take_profit,
             "pnl": self.pnl,
             "pnl_pct": self.pnl_pct,
-            "holding_minutes": self.holding_minutes
+            "holding_minutes": self.holding_minutes,
+            
+            # 完整流程数据
+            "input_data": self.process_data,
+            "decision_process": self.decision_process
         }
+
 
 
 @dataclass
@@ -129,6 +138,8 @@ class DailyRecord:
     # 实际交易信息 (如果开仓)
     traded: bool = False
     entry_price: float = 0.0
+    take_profit: float = 0.0  # 决策卖出价格
+    stop_loss: float = 0.0    # 决策止损价格
     exit_price: float = 0.0
     exit_reason: str = ""
     pnl_pct: float = 0.0
@@ -178,6 +189,8 @@ class DailyRecord:
             # 交易结果
             "traded": self.traded,
             "entry_price": self.entry_price,
+            "take_profit": self.take_profit,
+            "stop_loss": self.stop_loss,
             "exit_price": self.exit_price,
             "exit_reason": self.exit_reason,
             "pnl_pct": self.pnl_pct,
@@ -341,21 +354,58 @@ class DailyBacktester:
         return result
     
     async def _fetch_historical_15m(self, symbol: str, days: int) -> Optional[pd.DataFrame]:
-        """获取历史 15 分钟数据并保存原始数据"""
+        """获取历史 15 分钟数据 (优先从本地 raw_data 读取)"""
         try:
+            # 1. 尝试从本地 raw_data 读取最近 N 天的数据
+            # 获取最近的交易日
+            import os
+            raw_dir = self.data_manager.raw_data_dir
+            all_days = sorted([d for d in os.listdir(raw_dir) if os.path.isdir(os.path.join(raw_dir, d))], reverse=True)
+            target_days = all_days[:days+5] # 多读几天确保足够
+            
+            local_bars = []
+            valid_days = 0
+            
+            for date_str in target_days:
+                bars = self.data_manager.load_raw_bars(symbol, '15m', date_str)
+                if bars:
+
+                    local_bars.extend(bars)
+                    valid_days += 1
+            
+            if local_bars and valid_days >= min(3, days): # 如果有足够的本地数据
+                # 转换为 DataFrame
+                df = pd.DataFrame(local_bars)
+                if not df.empty and 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    # 确保本地化为 ET (如果尚未包含时区)
+                    if df['timestamp'].dt.tz is None:
+                        df['timestamp'] = df['timestamp'].dt.tz_localize(ET)
+                    else:
+                        df['timestamp'] = df['timestamp'].dt.tz_convert(ET)
+                        
+                    df.set_index('timestamp', inplace=True)
+                    df.sort_index(inplace=True)
+                    
+
+                        
+                    # 重新计算指标
+                    return self.data_agent._add_indicators(df)
+            
+            # 2. 如果本地数据不足，回退到通过 Cache/API 获取
+            print(f"  ⚠️ {symbol} 本地数据不足 (找到 {valid_days} 天)，尝试 API 获取...")
             bars = self.cache.get_bars(symbol, '15m', days=days)
             if bars:
                 df = self.cache.to_dataframe(bars)
-                
-                # 保存原始数据到 data/raw_data/{date}/{symbol}_15m.json
+                # 保存新获取的数据
                 if not df.empty:
-                    # 按日期分组保存
                     df_copy = df.copy()
                     df_copy['date'] = pd.to_datetime(df_copy.index).date
                     for trade_date, group in df_copy.groupby('date'):
                         self.data_manager.save_raw_dataframe(symbol, '15m', group.drop(columns=['date']), trade_date)
                 
                 return self.data_agent._add_indicators(df)
+                
             return None
         except Exception as e:
             print(f"  ⚠️ 获取 15m 数据失败: {e}")
@@ -405,9 +455,15 @@ class DailyBacktester:
         
         # 过滤交易时段
         timestamps = pd.to_datetime(day_data.index)
+        # 确保 timestamps 是 ET
+        if timestamps.tz is None:
+             timestamps = timestamps.tz_localize(ET)
+        else:
+             timestamps = timestamps.tz_convert(ET)
+             
         day_data = day_data[
-            ((timestamps.hour == 14) & (timestamps.minute >= 30)) |
-            ((timestamps.hour >= 15) & (timestamps.hour < 21))
+            ((timestamps.hour == 9) & (timestamps.minute >= 30)) |   # 9:30-9:59
+            ((timestamps.hour >= 10) & (timestamps.hour < 16))       # 10:00-15:59
         ]
         
         if day_data.empty or len(day_data) < 2:
@@ -419,7 +475,7 @@ class DailyBacktester:
         bars_for_decision = historical_15m  # 不包含当天任何数据
         
         # 入场价使用当天 OR15 收盘价（9:45 决策时能看到的价格）
-        day_data = df_15m[df_15m['date'] == trade_date]
+        # day_data 已经被过滤为正规交易时段
         if len(day_data) > 0:
             entry_price = float(day_data.iloc[0]['close'])
         elif len(historical_15m) > 0:
@@ -439,6 +495,50 @@ class DailyBacktester:
         trend = self.trend_agent.analyze(processed)
         decision = self.decision_agent.decide(processed, trend, symbol=symbol)
         
+        # ===== OR15 比较策略 (Volume Ratio > 1 & Price Ratio > 1) =====
+        if decision.action == 'BUY':
+            # 获取昨日 OR15
+            prev_dates = sorted(list(set(df_15m[df_15m['date'] < trade_date]['date'])))
+            if prev_dates:
+                prev_date = prev_dates[-1]
+                prev_day_data = df_15m[df_15m['date'] == prev_date].copy()
+                
+                # 过滤昨日交易时段，找到 OR15 (第一根 K 线)
+                prev_stamps = pd.to_datetime(prev_day_data.index)
+                if prev_stamps.tz is None: prev_stamps = prev_stamps.tz_localize(ET)
+                else: prev_stamps = prev_stamps.tz_convert(ET)
+                
+                prev_day_data = prev_day_data[
+                    ((prev_stamps.hour == 9) & (prev_stamps.minute >= 30)) |
+                    ((prev_stamps.hour >= 10) & (prev_stamps.hour < 16))
+                ]
+                
+                if not prev_day_data.empty:
+                    today_or15 = day_data.iloc[0]
+                    prev_or15 = prev_day_data.iloc[0]
+                    
+                    today_close = float(today_or15['close'])
+                    prev_close = float(prev_or15['close'])
+                    today_vol = float(today_or15['volume'])
+                    prev_vol = float(prev_or15['volume'])
+                    
+                    price_ratio = today_close / prev_close
+                    volume_ratio = today_vol / prev_vol if prev_vol > 0 else 0
+                    
+                    # 记录比值到原因中
+                    ratio_info = f" [P_Ratio:{price_ratio:.2f}, V_Ratio:{volume_ratio:.2f}]"
+                    
+                    # 判断条件
+                    if price_ratio > 1.0 and volume_ratio > 1.0:
+                        decision.summary_reason += ratio_info
+                        # 符合条件，保持 BUY，稍微增加置信度
+                        decision.confidence = min(0.95, decision.confidence + 0.1)
+                    else:
+                        # 不符合条件，转为 WAIT
+                        return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 > 1.0)")
+            else:
+                 return ("WAIT", 0.0, "无昨日数据对比")
+
         return (decision.action, decision.confidence, decision.summary_reason)
     
     async def _simulate_day(
@@ -464,11 +564,21 @@ class DailyBacktester:
             return None
         
         # 过滤掉盘前/盘后数据，只保留正规交易时段
-        # 美股正常交易时间: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
+        # 美股正常交易时间: 9:30 AM - 4:00 PM ET
         timestamps = pd.to_datetime(day_data.index)
+        
+
+
+        # 确保 timestamps 是 ET
+        if timestamps.tz is None:
+             timestamps = timestamps.tz_localize(ET)
+        else:
+             timestamps = timestamps.tz_convert(ET)
+             
         day_data = day_data[
-            ((timestamps.hour == 14) & (timestamps.minute >= 30)) |  # 14:30-14:59 UTC
-            ((timestamps.hour >= 15) & (timestamps.hour < 21))       # 15:00-20:59 UTC
+            ((timestamps.hour == 9) & (timestamps.minute >= 30)) |   # 9:30-9:59
+            ((timestamps.hour >= 10) & (timestamps.hour < 16))       # 10:00-15:59
+            # 16:00 bar usually implies closing price, handled by market close logic
         ]
         
         if day_data.empty or len(day_data) < 2:
@@ -503,6 +613,48 @@ class DailyBacktester:
             current_price=entry_price,
             timestamp=datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
         )
+        
+        # 准备 process_data (输入数据)
+        input_bars = []
+        indicators = {}
+        if processed.df_15m is not None and not processed.df_15m.empty:
+            # 获取最后 5 根历史 K 线
+            recent_df = processed.df_15m.iloc[-5:]
+            for idx, row in recent_df.iterrows():
+                bar_time = pd.to_datetime(idx)
+                if bar_time.tz is not None:
+                     bar_time = bar_time.tz_convert(ET)
+                
+                input_bars.append({
+                    "date": str(bar_time.date()),
+                    "time": bar_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "open": float(row['open']),
+                    "high": float(row['high']),
+                    "low": float(row['low']),
+                    "close": float(row['close']),
+                    "volume": int(row['volume'])
+                })
+            
+            # 获取指标 (使用最后一根 K 线)
+            last_row = processed.df_15m.iloc[-1]
+            last_hist_time = pd.to_datetime(processed.df_15m.index[-1])
+            if last_hist_time.tz is not None:
+                last_hist_time = last_hist_time.tz_convert(ET)
+                
+            indicators = {
+                "ema_9": float(last_row.get('ema_9', 0)),
+                "ema_21": float(last_row.get('ema_21', 0)),
+                "ema_50": float(last_row.get('ema_50', 0)),
+                "macd": float(last_row.get('macd', 0)),
+                "macd_signal": float(last_row.get('macd_signal', 0)),
+                "macd_hist": float(last_row.get('macd_hist', 0)),
+                "rsi": float(last_row.get('rsi', 0)),
+                "atr": float(last_row.get('atr', 0)),
+                "bb_upper": float(last_row.get('bb_upper', 0)),
+                "bb_lower": float(last_row.get('bb_lower', 0)),
+                "volume_ratio": float(last_row.get('volume_ratio', 0)),
+                "_data_as_of": last_hist_time.strftime("%Y-%m-%d %H:%M:%S")
+            }
         
         # 趋势分析
         trend = self.trend_agent.analyze(processed)
@@ -548,7 +700,20 @@ class DailyBacktester:
             entry_price=entry_price,  # 使用本地计算的入场价格
             entry_reason=decision.summary_reason,
             stop_loss=entry_price - (entry_price * stop_loss_pct),  # 动态止损
-            take_profit=entry_price + (entry_price * take_profit_pct)  # 动态止盈
+            take_profit=entry_price + (entry_price * take_profit_pct),  # 动态止盈
+            
+            # 完整流程数据
+            process_data={
+                "input_bars": input_bars,
+                "indicators": indicators
+            },
+            decision_process={
+                "weekly_bias": trend.weekly_bias.value if hasattr(trend, 'weekly_bias') and hasattr(trend.weekly_bias, 'value') else str(getattr(trend, 'weekly_bias', '')),
+                "daily_bias": trend.daily_bias.value if hasattr(trend, 'daily_bias') and hasattr(trend.daily_bias, 'value') else str(getattr(trend, 'daily_bias', '')),
+                "intraday_bias": getattr(trend, 'intraday_structure', ''),
+                "notes": decision.detailed_reasons,
+                "confidence": decision.confidence
+            }
         )
         
         if verbose:
@@ -814,7 +979,7 @@ async def main():
     
     parser = argparse.ArgumentParser(description="美股日内回测系统")
     parser.add_argument("--symbols", type=str, help="股票代码，逗号分隔（默认：所有股票）")
-    parser.add_argument("--days", type=int, default=30, help="回测天数")
+    parser.add_argument("--days", type=int, default=3, help="回测天数")
     parser.add_argument("--html", action="store_true", help="生成 HTML 报告")
     parser.add_argument("--quiet", action="store_true", help="安静模式")
     parser.add_argument("--preset", type=str, choices=["momentum", "ai", "all"], 
@@ -969,11 +1134,17 @@ async def run_backtest_all(
         
         df_15m['date'] = pd.to_datetime(df_15m.index).date
         
-        # 过滤正规交易时段
+        # 过滤正规交易时段 (ET: 09:30 - 16:00)
         timestamps = pd.to_datetime(df_15m.index)
+        # 确保 timestamps 是 ET
+        if timestamps.tz is None:
+             timestamps = timestamps.tz_localize(ET)
+        else:
+             timestamps = timestamps.tz_convert(ET)
+             
         df_15m_filtered = df_15m[
-            ((timestamps.hour == 14) & (timestamps.minute >= 30)) |
-            ((timestamps.hour >= 15) & (timestamps.hour < 21))
+            ((timestamps.hour == 9) & (timestamps.minute >= 30)) |   # 9:30-9:59
+            ((timestamps.hour >= 10) & (timestamps.hour < 16))       # 10:00-15:59
         ].copy()
         
         stock_data[symbol] = {
@@ -1159,6 +1330,8 @@ async def run_backtest_all(
                     decision_reason = trade.entry_reason
                     traded = True
                     entry_price = trade.entry_price
+                    take_profit = trade.take_profit
+                    stop_loss = trade.stop_loss
                     exit_price = trade.exit_price or 0
                     exit_reason = trade.exit_reason
                     pnl_pct = trade.pnl_pct
@@ -1168,12 +1341,14 @@ async def run_backtest_all(
                     decision_reason = sig['reason']
                     traded = False
                     entry_price = exit_price = pnl_pct = 0
+                    take_profit = stop_loss = 0
                     exit_reason = ""
             else:
                 action = sig['action']
                 decision_reason = sig['reason']  # 保留原始决策理由
                 traded = False
                 entry_price = exit_price = pnl_pct = 0
+                take_profit = stop_loss = 0
                 exit_reason = ""
             
             # 创建每日记录 (包含完整过程数据)
@@ -1193,6 +1368,8 @@ async def run_backtest_all(
                 max_potential_pct=sig['max_potential_pct'],
                 traded=traded,
                 entry_price=entry_price,
+                take_profit=take_profit,
+                stop_loss=stop_loss,
                 exit_price=exit_price,
                 exit_reason=exit_reason,
                 pnl_pct=pnl_pct,

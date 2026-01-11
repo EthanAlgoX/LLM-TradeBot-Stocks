@@ -43,16 +43,22 @@ class Config:
     def _override_from_env(self):
         """从环境变量覆盖配置"""
         # Binance
+        if 'binance' not in self._config:
+             self._config['binance'] = {}
         if os.getenv('BINANCE_API_KEY'):
             self._config['binance']['api_key'] = os.getenv('BINANCE_API_KEY')
         if os.getenv('BINANCE_API_SECRET'):
             self._config['binance']['api_secret'] = os.getenv('BINANCE_API_SECRET')
         
         # DeepSeek (向后兼容)
+        if 'deepseek' not in self._config:
+             self._config['deepseek'] = {}
         if os.getenv('DEEPSEEK_API_KEY'):
             self._config['deepseek']['api_key'] = os.getenv('DEEPSEEK_API_KEY')
         
         # Redis
+        if 'redis' not in self._config:
+             self._config['redis'] = {}
         if os.getenv('REDIS_HOST'):
             self._config['redis']['host'] = os.getenv('REDIS_HOST')
         if os.getenv('REDIS_PORT'):
