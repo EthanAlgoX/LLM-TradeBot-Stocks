@@ -367,8 +367,15 @@ class DailyBacktester:
         historical_15m = df_15m[df_15m['date'] < trade_date].tail(100)
         bars_for_decision = historical_15m  # 不包含当天任何数据
         
-        # 入场价使用前一天最后一根K线收盘价（模拟开盘价）
-        entry_price = float(historical_15m.iloc[-1]['close']) if len(historical_15m) > 0 else 0.0
+        # 入场价使用当天开盘价（与 _simulate_day 保持一致）
+        # 修复 Bug: 之前使用前一天收盘价，导致与实际模拟不一致
+        day_data = df_15m[df_15m['date'] == trade_date]
+        if len(day_data) > 0:
+            entry_price = float(day_data.iloc[0]['open'])
+        elif len(historical_15m) > 0:
+            entry_price = float(historical_15m.iloc[-1]['close'])
+        else:
+            entry_price = 0.0
         
         processed = ProcessedData(
             symbol=symbol,

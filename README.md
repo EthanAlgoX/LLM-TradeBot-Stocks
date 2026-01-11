@@ -7,6 +7,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3.0-blue.svg)](LICENSE)
 [![Framework](https://img.shields.io/badge/Strategy-OR15%20%2B%20Multi--Agent-gold.svg)](https://github.com/EthanAlgoX/LLM-TradeBot-Stocks)
+[![Version](https://img.shields.io/badge/Version-1.1.0-green.svg)](CHANGELOG.md)
+
+> **v1.1.0 更新**: 修复多 Agent 数据流 bug，统一入场价格计算逻辑，提升回测准确性
 
 ---
 
@@ -75,7 +78,7 @@ python backtest_daily.py --days 30 --quiet
 
 ### 3-Agent Framework
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                  DataProcessorAgent                     │
 │  • Fetches multi-timeframe data (Weekly/Daily/15m)     │
@@ -99,6 +102,15 @@ python backtest_daily.py --days 30 --quiet
 │  • Generates TradeDecision (BUY/SELL/WAIT)             │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Data Flow (v1.1.0 修复)
+
+决策数据流严格避免 lookahead bias：
+
+1. **历史数据**：只使用 `trade_date` 之前的数据进行决策
+2. **入场价格**：统一使用当天开盘价 (`day_data.iloc[0]['open']`)
+3. **指标计算**：基于历史数据计算 RSI/MACD/EMA
+4. **止损/止盈模拟**：使用当天实际 K 线数据
 
 ### OR15 Strategy
 

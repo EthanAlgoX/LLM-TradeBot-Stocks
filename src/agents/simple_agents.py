@@ -308,8 +308,9 @@ class DecisionAgent:
         current = df.iloc[-1]
         prev = df.iloc[-2] if len(df) >= 2 else current
         
-        # Get current price
-        current_price = float(current['close'])
+        # Get current price - 使用传入的 current_price（真实入场价），而非 df 最后一根K线收盘价
+        # 修复 Bug: 之前覆盖了 ProcessedData 中传入的入场价
+        current_price = data.current_price if data.current_price > 0 else float(current['close'])
         decision.entry_price = current_price
         
         # Calculate stops
