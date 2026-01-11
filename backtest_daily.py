@@ -624,6 +624,40 @@ class DailyBacktester:
         return filepath
 
 
+def cleanup_old_backtests(max_keep: int = 5):
+    """
+    清理旧的回测会话，只保留最近的 N 个
+    
+    Args:
+        max_keep: 保留的最大会话数
+    """
+    import shutil
+    
+    backtest_dir = "data/backtest_results"
+    if not os.path.exists(backtest_dir):
+        return
+    
+    # 获取所有会话目录
+    sessions = []
+    for name in os.listdir(backtest_dir):
+        path = os.path.join(backtest_dir, name)
+        if os.path.isdir(path):
+            sessions.append((name, path))
+    
+    # 按时间戳排序（目录名格式：YYYY-MM-DD_HH-MM-SS）
+    sessions.sort(reverse=True)  # 最新的在前
+    
+    # 删除旧的会话
+    if len(sessions) > max_keep:
+        to_delete = sessions[max_keep:]
+        for name, path in to_delete:
+            try:
+                shutil.rmtree(path)
+                print(f"🗑️  删除旧回测: {name}")
+            except Exception as e:
+                print(f"⚠️  删除失败 {name}: {e}")
+
+
 async def main():
     # 导入 2026 股票池
     from src.config.watchlist_2026 import HIGH_MOMENTUM, AI_RELATED, ALL_TICKERS
@@ -657,6 +691,9 @@ async def main():
     output_dir = f"data/backtest_results/{run_timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
+    # 清理旧的回测会话，只保留最近 5 个
+    cleanup_old_backtests(max_keep=5)
+    
     print("=" * 60)
     print("🧪 美股日内回测系统")
     print("=" * 60)
@@ -679,6 +716,9 @@ async def main():
     
     # 生成汇总交易记录
     generate_trade_summary(all_results, start_date, end_date, output_dir)
+    
+    # 生成产生交易的股票汇总 JSON
+    generate_traded_stocks_summary(all_results, start_date, end_date, output_dir)
 
 
 def save_daily_records(daily_records: Dict[date, List[DailyRecord]], output_dir: str):
@@ -918,6 +958,75 @@ def generate_trade_summary(results: List[BacktestResult], start_date: date, end_
         print(f"    {t['日期']} {t['股票']}: {t['买入价格']} → {t['卖出价格']} | {t['收益率']} | {t['出场原因']}")
     
     print(f"\n💾 交易记录已保存: {csv_path}")
+
+
+def generate_traded_stocks_summary(results: List[BacktestResult], start_date: date, end_date: date, output_dir: str):
+    """
+    生成产生交易的股票汇总 JSON
+    
+    包含每只股票的交易统计和详细交易列表
+    """
+    from collections import defaultdict
+    
+    trades_by_stock = defaultdict(list)
+    
+    # 按股票分组交易
+    for r in results:
+        if not r.trades:
+            continue
+        for t in r.trades:
+            trades_by_stock[r.symbol].append({
+                "date": str(t.trade_date),
+                "entry_price": f"${t.entry_price:.2f}",
+                "exit_price": f"${t.exit_price:.2f}" if t.exit_price else "-",
+                "pnl_pct": f"{t.pnl_pct:+.2f}%",
+                "exit_reason": t.exit_reason,
+                "holding_time": f"{t.holding_minutes}min",
+                "entry_reason": t.entry_reason
+            })
+    
+    # 计算每只股票的统计
+    stock_summary = {}
+    for symbol, trades in trades_by_stock.items():
+        pnl_values = [float(t['pnl_pct'].replace('%', '').replace('+', '')) for t in trades]
+        winning_trades = sum(1 for p in pnl_values if p > 0)
+        total_pnl = sum(pnl_values)
+        
+        stock_summary[symbol] = {
+            "symbol": symbol,
+            "total_trades": len(trades),
+            "winning_trades": winning_trades,
+            "losing_trades": len(trades) - winning_trades,
+            "win_rate": f"{winning_trades/len(trades)*100:.1f}%",
+            "total_pnl_pct": f"{total_pnl:+.2f}%",
+            "avg_pnl_pct": f"{total_pnl/len(trades):.2f}%",
+            "max_win": f"{max(pnl_values):+.2f}%",
+            "max_loss": f"{min(pnl_values):+.2f}%",
+            "trades": trades
+        }
+    
+    # 按总收益排序
+    sorted_stocks = sorted(
+        stock_summary.items(), 
+        key=lambda x: float(x[1]['total_pnl_pct'].replace('%', '').replace('+', '')), 
+        reverse=True
+    )
+    
+    # 生成汇总
+    output = {
+        "session": os.path.basename(output_dir),
+        "period": f"{start_date} ~ {end_date}",
+        "total_stocks_traded": len(stock_summary),
+        "total_trades": sum(s['total_trades'] for s in stock_summary.values()),
+        "stocks": {symbol: data for symbol, data in sorted_stocks}
+    }
+    
+    # 保存
+    json_path = os.path.join(output_dir, "traded_stocks_summary.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
+    
+    print(f"💾 交易股票汇总已保存: {json_path}")
 
 
 if __name__ == "__main__":
