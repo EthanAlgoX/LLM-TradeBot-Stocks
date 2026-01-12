@@ -528,14 +528,15 @@ class DailyBacktester:
                     # 记录比值到原因中
                     ratio_info = f" [P_Ratio:{price_ratio:.2f}, V_Ratio:{volume_ratio:.2f}]"
                     
-                    # 判断条件
-                    if price_ratio > 1.0 and volume_ratio > 1.0:
+                    # 判断条件 (Volume Ratio > 1.2 & Price Ratio > 1)
+                    # 赢家交易往往有 V_Ratio > 2.0，提高门槛过滤杂音
+                    if price_ratio > 1.0 and volume_ratio > 1.2:
                         decision.summary_reason += ratio_info
                         # 符合条件，保持 BUY，稍微增加置信度
                         decision.confidence = min(0.95, decision.confidence + 0.1)
                     else:
                         # 不符合条件，转为 WAIT
-                        return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 > 1.0)")
+                        return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 P>1.0, V>1.2)")
             else:
                  return ("WAIT", 0.0, "无昨日数据对比")
 
@@ -676,22 +677,22 @@ class DailyBacktester:
         # 分析显示大部分高点出现在 19:00-20:00（收盘前 1-2 小时）
         # 早盘入场：标准止盈 4%
         # 午盘入场：放宽止盈 5%
-        # 晚盘入场：最大化止盈 6%
+        # 晚盘入场：最大化止盈 20%
         hour = entry_time.hour
         if hour < 15:  # 早盘（9:45-15:00）
-            take_profit_pct = 0.04  # 4%
+            take_profit_pct = 0.20  # 20% (原 4% 严重限制了 BKKT +22% 的潜力)
         elif hour < 18:  # 午盘（15:00-18:00）
-            take_profit_pct = 0.05  # 5%
+            take_profit_pct = 0.15  # 15%
         else:  # 晚盘（18:00-20:00）
-            take_profit_pct = 0.06  # 6%
+            take_profit_pct = 0.10  # 10%
         
         # 动态止损：超高波动股票使用更宽止损
         # 分析发现 SIDU/OSS/RDW 经常有 20%+ 潜在但被 -2.1% 止损
         ULTRA_HIGH_VOLATILITY = ["SIDU", "OSS", "RDW", "NFE", "APLD"]
         if symbol in ULTRA_HIGH_VOLATILITY:
-            stop_loss_pct = 0.03  # 3% 止损
+            stop_loss_pct = 0.03  # 3% 超高波动止损
         else:
-            stop_loss_pct = 0.02  # 2% 止损
+            stop_loss_pct = 0.02  # 2.0% 标准止损 (回测显示窄止损表现最好)
         
         trade = BacktestTrade(
             symbol=symbol,
@@ -723,9 +724,9 @@ class DailyBacktester:
         # 注意: 入场是在 9:45，即第一根 K 线收盘后
         # 所以需要从第二根 K 线 (index=1) 开始检查止损/止盈
         
-        # 追踪止损参数
-        TRAILING_ACTIVATION_PCT = 0.02  # 盈利超过 2% 启动追踪止损
-        TRAILING_DISTANCE_PCT = 0.015   # 追踪距离 1.5%
+        # 追踪止损参数 (放宽以捕捉大趋势)
+        TRAILING_ACTIVATION_PCT = 0.03  # 盈利超过 3% 才启动 (原 2%)
+        TRAILING_DISTANCE_PCT = 0.03    # 追踪距离 3% (原 1.5% 容易被洗盘)
         trailing_stop_active = False
         
         for i in range(1, len(day_data)):
@@ -737,6 +738,19 @@ class DailyBacktester:
             
             # 计算当前盈亏
             current_pnl_pct = (bar_close - entry_price) / entry_price
+            
+            # 计算持仓时间 (分钟)
+            # bar.name 是 timestamp index
+            current_time = pd.Timestamp(bar_time)
+            holding_duration = int((current_time - pd.Timestamp(trade.entry_time)).total_seconds() / 60)
+            
+            # 3. 检查时间止损 (Time-Based Stop)
+            # 如果持仓超过 60 分钟且处于亏损状态 (< -0.5%)，强制离场
+            if holding_duration >= 60 and current_pnl_pct < -0.005:
+                trade.exit_time = bar_time
+                trade.exit_price = bar_close
+                trade.exit_reason = "TIME_STOP"
+                break
             
             # 启动追踪止损（盈利超过 2%）
             if current_pnl_pct > TRAILING_ACTIVATION_PCT and not trailing_stop_active:
