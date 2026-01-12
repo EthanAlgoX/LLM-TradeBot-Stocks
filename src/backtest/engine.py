@@ -46,7 +46,7 @@ class BacktestConfig:
     
     # 🔧 P0 Realism Improvements
     execution_latency_ms: int = 0  # 执行延迟（毫秒），模拟决策到执行的延迟，0=关闭
-    min_hold_hours: float = 1.0  # 最小持仓时间（小时），防止过度交易
+    min_hold_hours: float = 3.0  # 最小持仓时间（小时），防止过度交易
     
     def __post_init__(self):
         """验证配置参数"""
@@ -244,7 +244,8 @@ class BacktestEngine:
         self.portfolio = BacktestPortfolio(
             initial_capital=self.config.initial_capital,
             slippage=self.config.slippage,
-            commission=self.config.commission
+            commission=self.config.commission,
+            min_hold_hours=self.config.min_hold_hours
         )
         
         # 3. 遍历时间点

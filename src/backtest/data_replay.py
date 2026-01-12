@@ -17,7 +17,7 @@ import pandas as pd
 import numpy as np
 import os
 
-from src.api.market_client import MarketClient as BinanceClient
+from src.api.binance_client import BinanceClient
 from src.agents.data_sync_agent import MarketSnapshot
 from src.utils.logger import log
 from src.utils.kline_cache import get_kline_cache

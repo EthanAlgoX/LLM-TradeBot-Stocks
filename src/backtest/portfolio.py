@@ -269,7 +269,8 @@ class BacktestPortfolio:
         slippage: float = 0.001,
         commission: float = 0.0004,
         margin_config: MarginConfig = None,
-        fee_structure: FeeStructure = None
+        fee_structure: FeeStructure = None,
+        min_hold_hours: float = 0.0
     ):
         """
         初始化投资组合
@@ -280,6 +281,7 @@ class BacktestPortfolio:
             commission: 默认手续费 (已弃用，使用 fee_structure)
             margin_config: 保证金配置
             fee_structure: 手续费结构（Maker/Taker）
+            min_hold_hours: 最小持仓时间（小时），用于过滤追踪止损
         """
         self.initial_capital = initial_capital
         self.cash = initial_capital
@@ -287,6 +289,7 @@ class BacktestPortfolio:
         self.commission = commission
         self.margin_config = margin_config or MarginConfig()
         self.fee_structure = fee_structure or FeeStructure()
+        self.min_hold_hours = max(float(min_hold_hours or 0.0), 0.0)
         
         # 持仓 (symbol -> Position)
         self.positions: Dict[str, Position] = {}
@@ -734,7 +737,11 @@ class BacktestPortfolio:
             elif position.should_take_profit(price):
                 symbols_to_close.append((symbol, price, "take_profit"))
             elif position.should_trailing_stop(price):
-                symbols_to_close.append((symbol, price, "trailing_stop"))
+                hold_hours = 0.0
+                if position.entry_time:
+                    hold_hours = (timestamp - position.entry_time).total_seconds() / 3600
+                if hold_hours >= self.min_hold_hours:
+                    symbols_to_close.append((symbol, price, "trailing_stop"))
         
         for symbol, price, reason in symbols_to_close:
             trade = self.close_position(symbol, price, timestamp, reason)
@@ -780,7 +787,8 @@ class BacktestPortfolio:
                     continue
                 if position.trailing_stop_pct is not None:
                     stop_price = position.highest_price * (1 - position.trailing_stop_pct / 100)
-                    if low <= stop_price:
+                    hold_hours = (timestamp - position.entry_time).total_seconds() / 3600 if position.entry_time else 0.0
+                    if hold_hours >= self.min_hold_hours and low <= stop_price:
                         symbols_to_close.append((symbol, stop_price, "trailing_stop"))
             else:
                 position.update_price(low)
@@ -792,7 +800,8 @@ class BacktestPortfolio:
                     continue
                 if position.trailing_stop_pct is not None:
                     stop_price = position.lowest_price * (1 + position.trailing_stop_pct / 100)
-                    if high >= stop_price:
+                    hold_hours = (timestamp - position.entry_time).total_seconds() / 3600 if position.entry_time else 0.0
+                    if hold_hours >= self.min_hold_hours and high >= stop_price:
                         symbols_to_close.append((symbol, stop_price, "trailing_stop"))
 
         for symbol, price, reason in symbols_to_close:
