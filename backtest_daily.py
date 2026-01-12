@@ -67,6 +67,9 @@ class TradingStrategy:
     name: str
     description: str
     
+    # 是否使用 Agent 决策 (False = 只用简单比值判断)
+    use_agents: bool = True
+    
     # 入场过滤器
     price_ratio_min: float = 1.0      # OR15 价格比阈值
     volume_ratio_min: float = 1.2     # OR15 成交量比阈值
@@ -93,8 +96,9 @@ class TradingStrategy:
 # 预定义策略
 STRATEGIES = {
     1: TradingStrategy(
-        name="OR15 Momentum (Gap from Open)",
-        description="对比前日开盘价: 今日OR15 close > 昨日OR15 close",
+        name="Multi-Agent Momentum",
+        description="多Agent决策 (EMA/MACD/RSI) + OR15 对比前日开盘价过滤",
+        use_agents=True,  # 使用 Agent 框架
         price_ratio_min=1.0,
         volume_ratio_min=1.2,
         price_compare_mode='first_bar',  # 对比前日第一根K线
@@ -109,11 +113,12 @@ STRATEGIES = {
         time_stop_loss_threshold=-0.005
     ),
     2: TradingStrategy(
-        name="OR15 Momentum (Gap from Close)",
-        description="对比前日收盘价: 今日OR15 close > 昨日收盘价",
+        name="Simple Ratio (Gap from Close)",
+        description="简单比值策略: 只用 Price Ratio + Volume Ratio 判断",
+        use_agents=False,  # 不使用 Agent，直接计算比值
         price_ratio_min=1.0,
         volume_ratio_min=1.2,
-        price_compare_mode='last_bar',   # 对比前日最后一根K线 (收盘价)
+        price_compare_mode='last_bar',   # 对比前日收盘价
         stop_loss_pct=0.02,
         stop_loss_pct_volatile=0.03,
         take_profit_pct_early=0.20,
@@ -242,6 +247,9 @@ class DailyRecord:
     # 模拟交易过程 (如果交易)
     trade_simulation: Dict[str, Any] = field(default_factory=dict)  # 模拟执行细节
     
+    # ===== 价格比较基准 (策略追踪) =====
+    price_compare_base: Dict[str, Any] = field(default_factory=dict)  # {mode, prev_close, today_or15_close, price_ratio, volume_ratio}
+    
     def to_dict(self) -> Dict:
         return {
             # 基本信息
@@ -289,7 +297,10 @@ class DailyRecord:
             },
             
             # 模拟交易详情
-            "trade_simulation": self.trade_simulation
+            "trade_simulation": self.trade_simulation,
+            
+            # 价格比较基准 (策略追踪)
+            "price_compare_base": self.price_compare_base
         }
 
 
@@ -522,6 +533,64 @@ class DailyBacktester:
         except Exception as e:
             return None
     
+    def _calculate_ratio(
+        self,
+        day_data: pd.DataFrame,
+        df_15m: pd.DataFrame,
+        trade_date: date
+    ) -> Optional[Tuple[float, float, str]]:
+        """
+        计算价格比值和成交量比值
+        
+        Returns:
+            (price_ratio, volume_ratio, ratio_info) or None if no data
+        """
+        # 获取昨日数据
+        prev_dates = sorted(list(set(df_15m[df_15m['date'] < trade_date]['date'])))
+        if not prev_dates:
+            return None
+        
+        prev_date = prev_dates[-1]
+        prev_day_data = df_15m[df_15m['date'] == prev_date].copy()
+        
+        # 过滤昨日交易时段
+        prev_stamps = pd.to_datetime(prev_day_data.index)
+        if prev_stamps.tz is None:
+            prev_stamps = prev_stamps.tz_localize(ET)
+        else:
+            prev_stamps = prev_stamps.tz_convert(ET)
+        
+        prev_day_data = prev_day_data[
+            ((prev_stamps.hour == 9) & (prev_stamps.minute >= 30)) |
+            ((prev_stamps.hour >= 10) & (prev_stamps.hour < 16))
+        ]
+        
+        if prev_day_data.empty or day_data.empty:
+            return None
+        
+        today_or15 = day_data.iloc[0]
+        prev_or15 = prev_day_data.iloc[0]   # 前日第一根 K 线 (开盘)
+        prev_last_bar = prev_day_data.iloc[-1]  # 前日最后一根 K 线 (收盘)
+        
+        today_close = float(today_or15['close'])
+        today_vol = float(today_or15['volume'])
+        
+        # 根据策略选择价格比较基准
+        if self.strategy.price_compare_mode == 'last_bar':
+            prev_close = float(prev_last_bar['close'])
+        else:
+            prev_close = float(prev_or15['close'])
+        
+        # 成交量始终对比前日 OR15
+        prev_vol = float(prev_or15['volume'])
+        
+        price_ratio = today_close / prev_close if prev_close > 0 else 0
+        volume_ratio = today_vol / prev_vol if prev_vol > 0 else 0
+        
+        ratio_info = f" [P_Ratio:{price_ratio:.2f}, V_Ratio:{volume_ratio:.2f}]"
+        
+        return (price_ratio, volume_ratio, ratio_info)
+    
     def _evaluate_signal(
         self,
         symbol: str,
@@ -572,75 +641,55 @@ class DailyBacktester:
         else:
             entry_price = 0.0
         
-        processed = ProcessedData(
-            symbol=symbol,
-            df_weekly=df_weekly[df_weekly.index.date < trade_date] if df_weekly is not None else None,
-            df_daily=df_daily[df_daily.index.date < trade_date] if df_daily is not None else None,
-            df_15m=bars_for_decision,
-            current_price=entry_price,
-            timestamp=datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
-        )
-        
-        trend = self.trend_agent.analyze(processed)
-        decision = self.decision_agent.decide(processed, trend, symbol=symbol)
-        
-        # ===== OR15 比较策略 (Volume Ratio > 1 & Price Ratio > 1) =====
-        if decision.action == 'BUY':
-            # 获取昨日 OR15
-            prev_dates = sorted(list(set(df_15m[df_15m['date'] < trade_date]['date'])))
-            if prev_dates:
-                prev_date = prev_dates[-1]
-                prev_day_data = df_15m[df_15m['date'] == prev_date].copy()
-                
-                # 过滤昨日交易时段，找到 OR15 (第一根 K 线)
-                prev_stamps = pd.to_datetime(prev_day_data.index)
-                if prev_stamps.tz is None: prev_stamps = prev_stamps.tz_localize(ET)
-                else: prev_stamps = prev_stamps.tz_convert(ET)
-                
-                prev_day_data = prev_day_data[
-                    ((prev_stamps.hour == 9) & (prev_stamps.minute >= 30)) |
-                    ((prev_stamps.hour >= 10) & (prev_stamps.hour < 16))
-                ]
-                
-                if not prev_day_data.empty:
-                    today_or15 = day_data.iloc[0]
-                    prev_or15 = prev_day_data.iloc[0]   # 前日第一根 K 线 (开盘)
-                    prev_last_bar = prev_day_data.iloc[-1]  # 前日最后一根 K 线 (收盘)
-                    
-                    today_close = float(today_or15['close'])
-                    today_vol = float(today_or15['volume'])
-                    
-                    # 根据策略选择价格比较基准
-                    if self.strategy.price_compare_mode == 'last_bar':
-                        # 策略 2: 对比前日收盘价
-                        prev_close = float(prev_last_bar['close'])
-                    else:
-                        # 策略 1 (默认): 对比前日开盘价 (OR15)
-                        prev_close = float(prev_or15['close'])
-                    
-                    # 成交量始终对比前日 OR15
-                    prev_vol = float(prev_or15['volume'])
-                    
-                    price_ratio = today_close / prev_close
-                    volume_ratio = today_vol / prev_vol if prev_vol > 0 else 0
-                    
-                    # 记录比值到原因中
-                    ratio_info = f" [P_Ratio:{price_ratio:.2f}, V_Ratio:{volume_ratio:.2f}]"
-                    
-                    # 判断条件: 使用策略参数
+        # ===== 根据策略类型选择决策路径 =====
+        if self.strategy.use_agents:
+            # ===== 策略 1: Multi-Agent 决策路径 =====
+            processed = ProcessedData(
+                symbol=symbol,
+                df_weekly=df_weekly[df_weekly.index.date < trade_date] if df_weekly is not None else None,
+                df_daily=df_daily[df_daily.index.date < trade_date] if df_daily is not None else None,
+                df_15m=bars_for_decision,
+                current_price=entry_price,
+                timestamp=datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
+            )
+            
+            trend = self.trend_agent.analyze(processed)
+            decision = self.decision_agent.decide(processed, trend, symbol=symbol)
+            
+            # OR15 比较过滤 (在 Agent 决策为 BUY 后再过滤)
+            if decision.action == 'BUY':
+                ratio_result = self._calculate_ratio(day_data, df_15m, trade_date)
+                if ratio_result:
+                    price_ratio, volume_ratio, ratio_info = ratio_result
                     p_min = self.strategy.price_ratio_min
                     v_min = self.strategy.volume_ratio_min
                     if price_ratio > p_min and volume_ratio > v_min:
                         decision.summary_reason += ratio_info
-                        # 符合条件，保持 BUY，稍微增加置信度
                         decision.confidence = min(0.95, decision.confidence + 0.1)
                     else:
-                        # 不符合条件，转为 WAIT
                         return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 P>{p_min}, V>{v_min})")
+                else:
+                    return ("WAIT", 0.0, "无昨日数据对比")
+            
+            return (decision.action, decision.confidence, decision.summary_reason)
+        
+        else:
+            # ===== 策略 2: Simple Ratio 决策路径 (不使用 Agent) =====
+            ratio_result = self._calculate_ratio(day_data, df_15m, trade_date)
+            if not ratio_result:
+                return ("WAIT", 0.0, "无昨日数据对比")
+            
+            price_ratio, volume_ratio, ratio_info = ratio_result
+            p_min = self.strategy.price_ratio_min
+            v_min = self.strategy.volume_ratio_min
+            
+            # 简单比值判断：满足阈值即买入
+            if price_ratio > p_min and volume_ratio > v_min:
+                reason = f"简单比值买入信号: P_Ratio={price_ratio:.2f} (>{p_min}), V_Ratio={volume_ratio:.2f} (>{v_min})"
+                confidence = min(0.9, 0.5 + (price_ratio - 1) * 2 + (volume_ratio - 1) * 0.2)  # 根据比值计算置信度
+                return ("BUY", confidence, reason)
             else:
-                 return ("WAIT", 0.0, "无昨日数据对比")
-
-        return (decision.action, decision.confidence, decision.summary_reason)
+                return ("WAIT", 0.0, f"比值不足{ratio_info} (需 P>{p_min}, V>{v_min})")
     
     async def _simulate_day(
         self,
@@ -758,11 +807,36 @@ class DailyBacktester:
                 "_data_as_of": last_hist_time.strftime("%Y-%m-%d %H:%M:%S")
             }
         
-        # 趋势分析
-        trend = self.trend_agent.analyze(processed)
-        
-        # 决策（传入 symbol 用于高波动股票检测）
-        decision = self.decision_agent.decide(processed, trend, symbol=symbol)
+        # ===== 根据策略类型选择决策路径 =====
+        if self.strategy.use_agents:
+            # ===== 策略 1: Multi-Agent 决策 =====
+            trend = self.trend_agent.analyze(processed)
+            decision = self.decision_agent.decide(processed, trend, symbol=symbol)
+        else:
+            # ===== 策略 2: Simple Ratio 决策 (不使用 Agent) =====
+            ratio_result = self._calculate_ratio(day_data, df_15m, trade_date)
+            if ratio_result:
+                price_ratio, volume_ratio, ratio_info = ratio_result
+                p_min = self.strategy.price_ratio_min
+                v_min = self.strategy.volume_ratio_min
+                
+                if price_ratio > p_min and volume_ratio > v_min:
+                    # 创建模拟决策对象
+                    class SimpleDecision:
+                        action = "BUY"
+                        summary_reason = f"简单比值买入: P_Ratio={price_ratio:.2f} (>{p_min}), V_Ratio={volume_ratio:.2f} (>{v_min})"
+                        confidence = min(0.9, 0.5 + (price_ratio - 1) * 2 + (volume_ratio - 1) * 0.2)
+                        detailed_reasons = [f"Price Ratio: {price_ratio:.4f}", f"Volume Ratio: {volume_ratio:.4f}"]
+                    decision = SimpleDecision()
+                    trend = None  # Strategy 2 不使用趋势分析
+                else:
+                    if verbose:
+                        print(f"\n  📅 {trade_date} | WAIT | 比值不足{ratio_info}")
+                    return None
+            else:
+                if verbose:
+                    print(f"\n  📅 {trade_date} | WAIT | 无昨日数据对比")
+                return None
         
         if verbose:
             print(f"\n  📅 {trade_date} | {decision.action} | {decision.summary_reason}")
@@ -1409,6 +1483,50 @@ async def run_backtest_all(
             
             max_potential_pct = (day_high_after_or15 - or15_close) / or15_close * 100 if or15_close > 0 else 0
             
+            # 计算价格比较基准 (用于策略追踪)
+            price_compare_base = {}
+            # 找到前一个交易日
+            all_dates = sorted(df_15m['date'].unique())
+            prev_trading_day = None
+            for d in all_dates:
+                if d < trade_date:
+                    prev_trading_day = d
+            prev_day_data = df_15m[df_15m['date'] == prev_trading_day] if prev_trading_day else pd.DataFrame()
+            if not prev_day_data.empty and not day_data.empty:
+                # 过滤前一天的交易时段数据
+                prev_stamps = pd.to_datetime(prev_day_data.index)
+                if prev_stamps.tz is None: prev_stamps = prev_stamps.tz_localize(ET)
+                else: prev_stamps = prev_stamps.tz_convert(ET)
+                prev_day_filtered = prev_day_data[
+                    ((prev_stamps.hour == 9) & (prev_stamps.minute >= 30)) |
+                    ((prev_stamps.hour >= 10) & (prev_stamps.hour < 16))
+                ]
+                
+                if not prev_day_filtered.empty:
+                    prev_first_bar = prev_day_filtered.iloc[0]
+                    prev_last_bar = prev_day_filtered.iloc[-1]
+                    
+                    # 根据策略模式选择比较基准
+                    if backtester.strategy.price_compare_mode == 'last_bar':
+                        prev_close_ref = float(prev_last_bar['close'])
+                    else:
+                        prev_close_ref = float(prev_first_bar['close'])
+                    
+                    prev_volume_ref = float(prev_first_bar['volume'])  # 成交量始终对比 OR15
+                    
+                    price_ratio = or15_close / prev_close_ref if prev_close_ref > 0 else 0
+                    volume_ratio = or15_volume / prev_volume_ref if prev_volume_ref > 0 else 0
+                    
+                    price_compare_base = {
+                        "mode": backtester.strategy.price_compare_mode,
+                        "prev_close": round(prev_close_ref, 2),
+                        "prev_volume": int(prev_volume_ref),
+                        "today_or15_close": round(or15_close, 2),
+                        "today_or15_volume": or15_volume,
+                        "price_ratio": round(price_ratio, 4),
+                        "volume_ratio": round(volume_ratio, 4)
+                    }
+            
             signals.append({
                 'symbol': symbol,
                 'action': action,
@@ -1425,7 +1543,8 @@ async def run_backtest_all(
                 'daily_bias': daily_bias,
                 'day_high_after_or15': day_high_after_or15,
                 'day_high_time': day_high_time,
-                'max_potential_pct': max_potential_pct
+                'max_potential_pct': max_potential_pct,
+                'price_compare_base': price_compare_base
             })
         
         # 优化排序：HIGH_BETA 优先 + 信号强度
@@ -1523,7 +1642,8 @@ async def run_backtest_all(
                 weekly_bias=sig['weekly_bias'],
                 daily_bias=sig['daily_bias'],
                 intraday_bias="bullish" if sig['action'] == 'BUY' else "neutral",
-                decision_notes=[sig['reason']] if sig['reason'] else []
+                decision_notes=[sig['reason']] if sig['reason'] else [],
+                price_compare_base=sig.get('price_compare_base', {})
             )
             daily_records[trade_date].append(record)
     
