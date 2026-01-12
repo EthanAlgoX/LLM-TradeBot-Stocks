@@ -156,7 +156,7 @@ class DailyRecord:
     
     # ===== 输入数据 =====
     # OR15 K线数据 (前一根和当前根)
-    or15_bars: List[Dict] = field(default_factory=list)  # 最近几根15分钟K线
+    historical_bars: List[Dict] = field(default_factory=list)  # 历史 K 线 (用于趋势分析, 不含交易日数据)
     
     # 技术指标值
     indicators: Dict[str, Any] = field(default_factory=dict)  # EMA, MACD, RSI 等
@@ -207,7 +207,7 @@ class DailyRecord:
             
             # 输入数据 (K线)
             "input_data": {
-                "or15_bars": self.or15_bars,
+                "historical_bars": self.historical_bars,
                 "indicators": self.indicators
             },
             
@@ -1417,7 +1417,7 @@ async def run_backtest_all(
                 exit_reason=exit_reason,
                 pnl_pct=pnl_pct,
                 # 输入数据 (决策前的历史数据，不是当天数据)
-                or15_bars=sig['input_bars'],
+                historical_bars=sig['input_bars'],
                 indicators=sig['indicators'],
                 # 决策过程
                 weekly_bias=sig['weekly_bias'],
