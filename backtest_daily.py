@@ -60,6 +60,75 @@ STRATEGY_TIME = time(9, 45)  # 开盘后 DECISION_WINDOW_MINUTES 分钟
 MAX_DAILY_TRADES = 5
 
 
+# ============== 策略配置 ==============
+@dataclass
+class TradingStrategy:
+    """交易策略配置"""
+    name: str
+    description: str
+    
+    # 入场过滤器
+    price_ratio_min: float = 1.0      # OR15 价格比阈值
+    volume_ratio_min: float = 1.2     # OR15 成交量比阈值
+    
+    # 价格比较模式: 'first_bar' = 对比前日开盘价, 'last_bar' = 对比前日收盘价
+    price_compare_mode: str = 'first_bar'
+    
+    # 出场参数
+    stop_loss_pct: float = 0.02       # 止损 (2%)
+    stop_loss_pct_volatile: float = 0.03  # 高波动股止损 (3%)
+    take_profit_pct_early: float = 0.20   # 早盘止盈 (20%)
+    take_profit_pct_mid: float = 0.15     # 午盘止盈 (15%)
+    take_profit_pct_late: float = 0.10    # 晚盘止盈 (10%)
+    
+    # 追踪止损
+    trailing_activation: float = 0.03     # 激活阈值 (3%)
+    trailing_distance: float = 0.03       # 追踪距离 (3%)
+    
+    # 时间止损
+    time_stop_minutes: int = 60           # 持仓超过 N 分钟
+    time_stop_loss_threshold: float = -0.005  # 且亏损超过 -0.5%
+
+
+# 预定义策略
+STRATEGIES = {
+    1: TradingStrategy(
+        name="OR15 Momentum (Gap from Open)",
+        description="对比前日开盘价: 今日OR15 close > 昨日OR15 close",
+        price_ratio_min=1.0,
+        volume_ratio_min=1.2,
+        price_compare_mode='first_bar',  # 对比前日第一根K线
+        stop_loss_pct=0.02,
+        stop_loss_pct_volatile=0.03,
+        take_profit_pct_early=0.20,
+        take_profit_pct_mid=0.15,
+        take_profit_pct_late=0.10,
+        trailing_activation=0.03,
+        trailing_distance=0.03,
+        time_stop_minutes=60,
+        time_stop_loss_threshold=-0.005
+    ),
+    2: TradingStrategy(
+        name="OR15 Momentum (Gap from Close)",
+        description="对比前日收盘价: 今日OR15 close > 昨日收盘价",
+        price_ratio_min=1.0,
+        volume_ratio_min=1.2,
+        price_compare_mode='last_bar',   # 对比前日最后一根K线 (收盘价)
+        stop_loss_pct=0.02,
+        stop_loss_pct_volatile=0.03,
+        take_profit_pct_early=0.20,
+        take_profit_pct_mid=0.15,
+        take_profit_pct_late=0.10,
+        trailing_activation=0.03,
+        trailing_distance=0.03,
+        time_stop_minutes=60,
+        time_stop_loss_threshold=-0.005
+    ),
+}
+
+# 默认策略
+DEFAULT_STRATEGY = 1
+
 @dataclass
 class BacktestTrade:
     """单笔交易记录"""
@@ -290,12 +359,16 @@ class DailyBacktester:
     模拟每日开盘后 15 分钟决策，然后用 15 分钟 K 线模拟持仓
     """
     
-    def __init__(self):
+    def __init__(self, strategy_id: int = DEFAULT_STRATEGY):
         self.data_agent = DataProcessorAgent()
         self.trend_agent = MultiPeriodAgent()
         self.decision_agent = DecisionAgent()
         self.cache = DataCache()
         self.data_manager = DataManager()  # 数据存储管理
+        
+        # 加载策略配置
+        self.strategy = STRATEGIES.get(strategy_id, STRATEGIES[DEFAULT_STRATEGY])
+        self.strategy_id = strategy_id
     
     async def run_backtest(
         self,
@@ -531,11 +604,21 @@ class DailyBacktester:
                 
                 if not prev_day_data.empty:
                     today_or15 = day_data.iloc[0]
-                    prev_or15 = prev_day_data.iloc[0]
+                    prev_or15 = prev_day_data.iloc[0]   # 前日第一根 K 线 (开盘)
+                    prev_last_bar = prev_day_data.iloc[-1]  # 前日最后一根 K 线 (收盘)
                     
                     today_close = float(today_or15['close'])
-                    prev_close = float(prev_or15['close'])
                     today_vol = float(today_or15['volume'])
+                    
+                    # 根据策略选择价格比较基准
+                    if self.strategy.price_compare_mode == 'last_bar':
+                        # 策略 2: 对比前日收盘价
+                        prev_close = float(prev_last_bar['close'])
+                    else:
+                        # 策略 1 (默认): 对比前日开盘价 (OR15)
+                        prev_close = float(prev_or15['close'])
+                    
+                    # 成交量始终对比前日 OR15
                     prev_vol = float(prev_or15['volume'])
                     
                     price_ratio = today_close / prev_close
@@ -544,15 +627,16 @@ class DailyBacktester:
                     # 记录比值到原因中
                     ratio_info = f" [P_Ratio:{price_ratio:.2f}, V_Ratio:{volume_ratio:.2f}]"
                     
-                    # 判断条件 (Volume Ratio > 1.2 & Price Ratio > 1)
-                    # 赢家交易往往有 V_Ratio > 2.0，提高门槛过滤杂音
-                    if price_ratio > 1.0 and volume_ratio > 1.2:
+                    # 判断条件: 使用策略参数
+                    p_min = self.strategy.price_ratio_min
+                    v_min = self.strategy.volume_ratio_min
+                    if price_ratio > p_min and volume_ratio > v_min:
                         decision.summary_reason += ratio_info
                         # 符合条件，保持 BUY，稍微增加置信度
                         decision.confidence = min(0.95, decision.confidence + 0.1)
                     else:
                         # 不符合条件，转为 WAIT
-                        return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 P>1.0, V>1.2)")
+                        return ("WAIT", 0.0, f"OR15 动量不足{ratio_info} (需 P>{p_min}, V>{v_min})")
             else:
                  return ("WAIT", 0.0, "无昨日数据对比")
 
@@ -690,33 +774,28 @@ class DailyBacktester:
         # 创建交易记录 - 使用本地计算的 entry_price，避免不一致
         entry_time = datetime.combine(trade_date, STRATEGY_TIME, tzinfo=ET)
         
-        # 动态止盈：根据时间调整目标
-        # 分析显示大部分高点出现在 19:00-20:00（收盘前 1-2 小时）
-        # 早盘入场：标准止盈 4%
-        # 午盘入场：放宽止盈 5%
-        # 晚盘入场：最大化止盈 20%
+        # 动态止盈：使用策略配置
         hour = entry_time.hour
         if hour < 15:  # 早盘（9:45-15:00）
-            take_profit_pct = 0.20  # 20% (原 4% 严重限制了 BKKT +22% 的潜力)
+            take_profit_pct = self.strategy.take_profit_pct_early
         elif hour < 18:  # 午盘（15:00-18:00）
-            take_profit_pct = 0.15  # 15%
+            take_profit_pct = self.strategy.take_profit_pct_mid
         else:  # 晚盘（18:00-20:00）
-            take_profit_pct = 0.10  # 10%
+            take_profit_pct = self.strategy.take_profit_pct_late
         
-        # 动态止损：超高波动股票使用更宽止损
-        # 分析发现 SIDU/OSS/RDW 经常有 20%+ 潜在但被 -2.1% 止损
+        # 动态止损：使用策略配置
         ULTRA_HIGH_VOLATILITY = ["SIDU", "OSS", "RDW", "NFE", "APLD"]
         if symbol in ULTRA_HIGH_VOLATILITY:
-            stop_loss_pct = 0.03  # 3% 超高波动止损
+            stop_loss_pct = self.strategy.stop_loss_pct_volatile
         else:
-            stop_loss_pct = 0.02  # 2.0% 标准止损 (回测显示窄止损表现最好)
+            stop_loss_pct = self.strategy.stop_loss_pct
         
         trade = BacktestTrade(
             symbol=symbol,
             trade_date=trade_date,
             entry_time=entry_time,
             entry_price=entry_price,  # 使用本地计算的入场价格
-            entry_reason=decision.summary_reason,
+            entry_reason=f"[策略{self.strategy_id}] {decision.summary_reason}",
             stop_loss=entry_price - (entry_price * stop_loss_pct),  # 动态止损
             take_profit=entry_price + (entry_price * take_profit_pct),  # 动态止盈
             
@@ -730,7 +809,8 @@ class DailyBacktester:
                 "daily_bias": trend.daily_bias.value if hasattr(trend, 'daily_bias') and hasattr(trend.daily_bias, 'value') else str(getattr(trend, 'daily_bias', '')),
                 "intraday_bias": getattr(trend, 'intraday_structure', ''),
                 "notes": decision.detailed_reasons,
-                "confidence": decision.confidence
+                "confidence": decision.confidence,
+                "strategy": self.strategy.name
             }
         )
         
@@ -741,9 +821,9 @@ class DailyBacktester:
         # 注意: 入场是在 9:45，即第一根 K 线收盘后
         # 所以需要从第二根 K 线 (index=1) 开始检查止损/止盈
         
-        # 追踪止损参数 (放宽以捕捉大趋势)
-        TRAILING_ACTIVATION_PCT = 0.03  # 盈利超过 3% 才启动 (原 2%)
-        TRAILING_DISTANCE_PCT = 0.03    # 追踪距离 3% (原 1.5% 容易被洗盘)
+        # 追踪止损参数：使用策略配置
+        TRAILING_ACTIVATION_PCT = self.strategy.trailing_activation
+        TRAILING_DISTANCE_PCT = self.strategy.trailing_distance
         trailing_stop_active = False
         
         for i in range(1, len(day_data)):
@@ -982,12 +1062,13 @@ class DailyBacktester:
         return filepath
 
 
-def cleanup_old_backtests(max_keep: int = 5):
+def cleanup_old_backtests(max_keep: int = 5, strategy_id: int = None):
     """
     清理旧的回测会话，只保留最近的 N 个
     
     Args:
-        max_keep: 保留的最大会话数
+        max_keep: 每个策略保留的最大会话数
+        strategy_id: 指定策略 ID，如果为 None 则清理所有策略
     """
     import shutil
     
@@ -995,25 +1076,37 @@ def cleanup_old_backtests(max_keep: int = 5):
     if not os.path.exists(backtest_dir):
         return
     
-    # 获取所有会话目录
-    sessions = []
-    for name in os.listdir(backtest_dir):
-        path = os.path.join(backtest_dir, name)
-        if os.path.isdir(path):
-            sessions.append((name, path))
+    # 获取要清理的策略目录
+    if strategy_id is not None:
+        strategy_dirs = [f"strategy_{strategy_id}"]
+    else:
+        # 清理所有策略目录
+        strategy_dirs = [d for d in os.listdir(backtest_dir) if d.startswith("strategy_")]
     
-    # 按时间戳排序（目录名格式：YYYY-MM-DD_HH-MM-SS）
-    sessions.sort(reverse=True)  # 最新的在前
-    
-    # 删除旧的会话
-    if len(sessions) > max_keep:
-        to_delete = sessions[max_keep:]
-        for name, path in to_delete:
-            try:
-                shutil.rmtree(path)
-                print(f"🗑️  删除旧回测: {name}")
-            except Exception as e:
-                print(f"⚠️  删除失败 {name}: {e}")
+    for strategy_dir_name in strategy_dirs:
+        strategy_path = os.path.join(backtest_dir, strategy_dir_name)
+        if not os.path.isdir(strategy_path):
+            continue
+            
+        # 获取该策略下的所有会话目录
+        sessions = []
+        for name in os.listdir(strategy_path):
+            path = os.path.join(strategy_path, name)
+            if os.path.isdir(path):
+                sessions.append((name, path))
+        
+        # 按时间戳排序（目录名格式：YYYY-MM-DD_HH-MM-SS）
+        sessions.sort(reverse=True)  # 最新的在前
+        
+        # 删除旧的会话
+        if len(sessions) > max_keep:
+            to_delete = sessions[max_keep:]
+            for name, path in to_delete:
+                try:
+                    shutil.rmtree(path)
+                    print(f"🗑️  删除旧回测: {strategy_dir_name}/{name}")
+                except Exception as e:
+                    print(f"⚠️  删除失败 {name}: {e}")
 
 
 async def main():
@@ -1027,6 +1120,9 @@ async def main():
     parser.add_argument("--quiet", action="store_true", help="安静模式")
     parser.add_argument("--preset", type=str, choices=["momentum", "ai", "all"], 
                         default="all", help="预设股票池: momentum(高动量7只), ai(AI相关10只), all(全部股票)")
+    parser.add_argument("--strategy", type=int, default=DEFAULT_STRATEGY,
+                        help=f"策略编号 (默认: {DEFAULT_STRATEGY}). 可选: " + 
+                             ", ".join([f"{k}={v.name}" for k, v in STRATEGIES.items()]))
     
     args = parser.parse_args()
     
@@ -1044,20 +1140,22 @@ async def main():
     end_date = date.today()
     start_date = end_date - timedelta(days=args.days)
     
-    # 创建本次回测的输出目录 (按运行时间命名)
+    # 创建本次回测的输出目录 (按策略和运行时间归档)
     run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_dir = f"data/backtest_results/{run_timestamp}"
+    output_dir = f"data/backtest_results/strategy_{args.strategy}/{run_timestamp}"
     os.makedirs(output_dir, exist_ok=True)
     
     # 清理旧的回测会话，只保留最近 5 个
     cleanup_old_backtests(max_keep=5)
+    # 获取策略配置
+    strategy = STRATEGIES.get(args.strategy, STRATEGIES[DEFAULT_STRATEGY])
     
     print("=" * 60)
     print("🧪 美股日内回测系统")
     print("=" * 60)
     print(f"  股票: {', '.join(symbols)}")
     print(f"  时间: {start_date} ~ {end_date}")
-    print(f"  策略: 开盘后 15 分钟决策 + OR15 突破")
+    print(f"  策略: [{args.strategy}] {strategy.name} - {strategy.description}")
     print(f"  输出: {output_dir}")
     
     # 使用新的回测函数，同时获取 daily_records
@@ -1066,7 +1164,8 @@ async def main():
         start_date=start_date,
         end_date=end_date,
         output_dir=output_dir,
-        verbose=not args.quiet
+        verbose=not args.quiet,
+        strategy_id=args.strategy
     )
     
     # 保存每日记录到子文件夹
@@ -1138,7 +1237,8 @@ async def run_backtest_all(
     start_date: date,
     end_date: date,
     output_dir: str,
-    verbose: bool = True
+    verbose: bool = True,
+    strategy_id: int = DEFAULT_STRATEGY
 ) -> Tuple[List[BacktestResult], Dict[date, List[DailyRecord]]]:
     """
     运行多股票回测，返回回测结果和每日记录
@@ -1147,7 +1247,7 @@ async def run_backtest_all(
     """
     MAX_DAILY_TRADES = 5 # 每天最多交易的股票数量
     
-    backtester = DailyBacktester()
+    backtester = DailyBacktester(strategy_id=strategy_id)
     all_results = []
     daily_records: Dict[date, List[DailyRecord]] = {}
     
