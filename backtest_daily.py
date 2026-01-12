@@ -377,7 +377,7 @@ class DailyBacktester:
             import os
             raw_dir = self.data_manager.raw_data_dir
             all_days = sorted([d for d in os.listdir(raw_dir) if os.path.isdir(os.path.join(raw_dir, d))], reverse=True)
-            target_days = all_days[:days+5] # 多读几天确保足够
+            target_days = all_days[:days+10] # 多读 10 天确保 EMA-50 等指标有足够数据 (~260 bars)
             
             local_bars = []
             valid_days = 0
