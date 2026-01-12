@@ -85,6 +85,11 @@ class BacktestTrade:
     pnl_pct: float = 0.0
     holding_minutes: int = 0
     
+    # 资金管理 (用于加权收益计算)
+    position_size: int = 0        # 持仓股数
+    position_value: float = 0.0   # 持仓金额 ($)
+    pnl_dollar: float = 0.0       # 实际盈亏 ($)
+    
     # 详细流程数据
     process_data: Dict[str, Any] = field(default_factory=dict)
     decision_process: Dict[str, Any] = field(default_factory=dict)
@@ -104,6 +109,11 @@ class BacktestTrade:
             "pnl": self.pnl,
             "pnl_pct": self.pnl_pct,
             "holding_minutes": self.holding_minutes,
+            
+            # 资金管理
+            "position_size": self.position_size,
+            "position_value": self.position_value,
+            "pnl_dollar": self.pnl_dollar,
             
             # 完整流程数据
             "input_data": self.process_data,
@@ -242,6 +252,12 @@ class BacktestResult:
     take_profit_count: int = 0
     stop_loss_count: int = 0
     market_close_count: int = 0
+    
+    # 资金管理
+    initial_capital: float = 0.0      # 初始资金
+    total_pnl_dollar: float = 0.0     # 总盈亏 ($)
+    final_capital: float = 0.0        # 最终资金
+    portfolio_return_pct: float = 0.0 # 组合真实收益率
     
     # 详细交易记录
     trades: List[BacktestTrade] = field(default_factory=list)
@@ -549,7 +565,8 @@ class DailyBacktester:
         df_15m: pd.DataFrame,
         df_weekly: Optional[pd.DataFrame],
         df_daily: Optional[pd.DataFrame],
-        verbose: bool
+        verbose: bool,
+        position_value_per_trade: float = 10000.0  # 每笔交易分配的资金 ($)
     ) -> Optional[BacktestTrade]:
         """
         模拟单个交易日
@@ -787,6 +804,11 @@ class DailyBacktester:
         trade.pnl = trade.exit_price - trade.entry_price
         trade.pnl_pct = (trade.pnl / trade.entry_price) * 100 - SLIPPAGE_PCT * 100  # 扣除滑点
         
+        # 计算持仓金额和实际盈亏 ($) - 简化模式: 每笔恰好 $10,000
+        trade.position_value = position_value_per_trade                          # 固定投入金额 ($10,000)
+        trade.position_size = trade.position_value / trade.entry_price           # 理论股数 (允许小数)
+        trade.pnl_dollar = trade.position_value * (trade.pnl_pct / 100)          # 实际盈亏 ($) = 投入 × 收益率
+        
         # 计算持仓时间 - 使用时间差避免时区问题
         # 注意: exit_time 和 entry_time 都是 timezone-aware
         if trade.exit_time and trade.entry_time:
@@ -829,6 +851,13 @@ class DailyBacktester:
         result.take_profit_count = sum(1 for t in result.trades if t.exit_reason == "TAKE_PROFIT")
         result.stop_loss_count = sum(1 for t in result.trades if t.exit_reason == "STOP_LOSS")
         result.market_close_count = sum(1 for t in result.trades if t.exit_reason == "MARKET_CLOSE")
+        
+        # 资金管理统计 (真实收益率)
+        total_invested = sum(t.position_value for t in result.trades)
+        result.total_pnl_dollar = sum(t.pnl_dollar for t in result.trades)
+        result.initial_capital = total_invested  # 该股票的总投入
+        result.final_capital = total_invested + result.total_pnl_dollar
+        result.portfolio_return_pct = (result.total_pnl_dollar / total_invested * 100) if total_invested > 0 else 0.0
     
     def _print_result(self, result: BacktestResult):
         """打印回测结果"""
@@ -1450,13 +1479,21 @@ def generate_trade_summary(results: List[BacktestResult], start_date: date, end_
     total_pnl = sum(r.total_pnl_pct for r in results)
     winning = sum(r.winning_trades for r in results)
     
+    # 资金加权收益率 (真实组合收益)
+    total_invested = sum(r.initial_capital for r in results)
+    total_pnl_dollar = sum(r.total_pnl_dollar for r in results)
+    portfolio_return = (total_pnl_dollar / total_invested * 100) if total_invested > 0 else 0.0
+    
     print("\n" + "=" * 60)
     print("📊 回测汇总")
     print("=" * 60)
     print(f"  总交易数: {total_trades}")
     print(f"  盈利交易: {winning}")
     print(f"  胜率: {winning/total_trades*100:.1f}%" if total_trades > 0 else "  胜率: N/A")
-    print(f"  总收益: {total_pnl:+.2f}%")
+    print()
+    print(f"  💵 总投入: ${total_invested:,.2f}")
+    print(f"  💰 总盈亏: ${total_pnl_dollar:+,.2f}")
+    print(f"  📈 组合真实收益率: {portfolio_return:+.2f}%  (= 总盈亏 / 总投入)")
     print()
     print("  📋 交易明细:")
     for t in all_trades:
